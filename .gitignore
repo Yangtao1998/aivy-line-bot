@@ -1,0 +1,8 @@
+.env
+state.json
+*.log
+__pycache__/
+*.pyc
+last_webhook.txt
+ngrok.log
+tunnel.log
