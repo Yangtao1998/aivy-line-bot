@@ -349,6 +349,26 @@ def send_evening_summary():
 def ping():
     return 'pong', 200
 
+@app.route('/trigger/morning-summary', methods=['GET'])
+def trigger_morning_summary():
+    send_morning_summary()
+    return 'morning summary sent', 200
+
+@app.route('/trigger/evening-summary', methods=['GET'])
+def trigger_evening_summary():
+    send_evening_summary()
+    return 'evening summary sent', 200
+
+@app.route('/trigger/morning-prompt', methods=['GET'])
+def trigger_morning_prompt():
+    send_morning_prompt()
+    return 'morning prompt sent', 200
+
+@app.route('/trigger/evening-prompt', methods=['GET'])
+def trigger_evening_prompt():
+    send_evening_prompt()
+    return 'evening prompt sent', 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     signature = request.headers.get('X-Line-Signature', '')
