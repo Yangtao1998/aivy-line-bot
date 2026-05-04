@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 from datetime import datetime, date, timedelta
 from collections import defaultdict
-from flask import Flask, request, abort
+from flask import Flask, request, abort, render_template_string
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
 from linebot.v3.webhooks import MessageEvent, TextMessageContent, JoinEvent
@@ -146,6 +146,85 @@ def save_evening_to_db(reports, date_str):
             logger.info(f'晚間資料已存入 Supabase：{len(rows)} 筆')
     except Exception as e:
         logger.error(f'晚間資料存入 Supabase 失敗：{e}')
+
+# ── 週報 ─────────────────────────────────────────────────────
+def send_weekly_report():
+    """每週一 08:00 發送上週完成率報告給群組"""
+    if not supabase_client:
+        return
+    try:
+        today = date.today()
+        week_start = (today - timedelta(days=7)).isoformat()
+        week_end   = (today - timedelta(days=1)).isoformat()
+
+        result = supabase_client.table('daily_reports')\
+            .select('manager, status')\
+            .eq('session', 'evening')\
+            .gte('report_date', week_start)\
+            .lte('report_date', week_end)\
+            .execute()
+
+        if not result.data:
+            push(TextMessage(text="📊 上週尚無回報資料"))
+            return
+
+        # 計算每人完成率
+        stats = defaultdict(lambda: {'done': 0, 'total': 0, 'incomplete': []})
+        for row in result.data:
+            mgr = row['manager']
+            if row['status'] == 'not_reported':
+                continue
+            stats[mgr]['total'] += 1
+            if row['status'] == 'done':
+                stats[mgr]['done'] += 1
+
+        # 查未完成項目
+        incomplete_result = supabase_client.table('daily_reports')\
+            .select('manager, item_text, reason')\
+            .eq('session', 'evening')\
+            .eq('status', 'incomplete')\
+            .gte('report_date', week_start)\
+            .lte('report_date', week_end)\
+            .execute()
+
+        incomplete_by_mgr = defaultdict(list)
+        for row in incomplete_result.data:
+            incomplete_by_mgr[row['manager']].append(row['item_text'])
+
+        # 組成報告文字
+        date_range = f"{week_start[5:]} – {week_end[5:]}"
+        lines = [f"📊 上週完成率報告（{date_range}）\n"]
+
+        for mgr in MANAGERS:
+            s = stats.get(mgr, {'done': 0, 'total': 0})
+            if s['total'] == 0:
+                lines.append(f"{mgr}：無資料")
+                continue
+            rate = int(s['done'] / s['total'] * 100)
+            filled = rate // 10
+            bar = '█' * filled + '░' * (10 - filled)
+            lines.append(f"{mgr}    {bar} {rate}%")
+
+        incomplete_lines = []
+        for mgr in MANAGERS:
+            items = incomplete_by_mgr.get(mgr, [])
+            if items:
+                from collections import Counter
+                counted = Counter(items)
+                for item, cnt in counted.most_common():
+                    suffix = f"（出現 {cnt} 次）" if cnt > 1 else ""
+                    incomplete_lines.append(f"• {mgr}：{item}{suffix}")
+
+        if incomplete_lines:
+            lines.append("\n未完成項目：")
+            lines.extend(incomplete_lines)
+
+        lines.append(f"\n詳細紀錄：https://aivy-line-bot.onrender.com/dashboard")
+        push(TextMessage(text='\n'.join(lines)))
+        logger.info('週報發送完成')
+
+    except Exception as e:
+        logger.error(f'週報發送失敗：{e}')
 
 # ── 連續未完成提醒 ───────────────────────────────────────────
 def check_overdue_items():
@@ -500,6 +579,108 @@ def trigger_check_overdue():
     check_overdue_items()
     return 'overdue check done', 200
 
+@app.route('/trigger/weekly-report', methods=['GET'])
+def trigger_weekly_report():
+    send_weekly_report()
+    return 'weekly report sent', 200
+
+@app.route('/dashboard', methods=['GET'])
+def dashboard():
+    days = 7
+    if not supabase_client:
+        return '<h2>Supabase 未連線</h2>', 500
+
+    since = (date.today() - timedelta(days=days)).isoformat()
+    result = supabase_client.table('daily_reports')\
+        .select('report_date, manager, session, item_text, status, reason')\
+        .gte('report_date', since)\
+        .order('report_date', desc=True)\
+        .order('manager')\
+        .execute()
+
+    rows = result.data or []
+
+    # 整理資料：日期 → 階段 → 人員 → 項目
+    from collections import OrderedDict
+    days_data = OrderedDict()
+    for row in rows:
+        d = row['report_date']
+        s = row['session']
+        m = row['manager']
+        days_data.setdefault(d, {'morning': defaultdict(list), 'evening': defaultdict(list)})
+        days_data[d][s][m].append(row)
+
+    STATUS_COLOR = {'done': '#1AAE1A', 'incomplete': '#E53935',
+                    'reported': '#1A73E8', 'not_reported': '#BBBBBB'}
+    STATUS_LABEL = {'done': '✅', 'incomplete': '❌',
+                    'reported': '✅', 'not_reported': '⏳'}
+
+    html_rows = ''
+    for day, sessions in days_data.items():
+        for session_key, label in [('morning', '☀️ 早報'), ('evening', '🌙 晚報')]:
+            session_data = sessions[session_key]
+            if not session_data:
+                continue
+            for mgr in MANAGERS:
+                items = session_data.get(mgr, [])
+                if not items:
+                    continue
+                for i, item in enumerate(items):
+                    color  = STATUS_COLOR.get(item['status'], '#888')
+                    emoji  = STATUS_LABEL.get(item['status'], '')
+                    reason = f'<br><small style="color:#888">（{item["reason"]}）</small>' if item.get('reason') else ''
+                    html_rows += f'''
+                    <tr>
+                      {"<td rowspan='" + str(len(items)) + "' style='font-weight:bold;color:#333'>" + day + "</td>" if i == 0 else ""}
+                      {"<td rowspan='" + str(len(items)) + "'>" + label + "</td>" if i == 0 else ""}
+                      {"<td rowspan='" + str(len(items)) + "' style='font-weight:bold'>" + mgr + "</td>" if i == 0 else ""}
+                      <td>{item["item_text"]}{reason}</td>
+                      <td style="color:{color};font-weight:bold">{emoji}</td>
+                    </tr>'''
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>艾薇 每日回報紀錄</title>
+  <style>
+    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
+    body {{ font-family: -apple-system, sans-serif; background: #f5f7fa; color: #333; }}
+    .header {{ background: linear-gradient(135deg,#1A73E8,#5C5CE6); color:#fff; padding: 20px; text-align:center; }}
+    .header h1 {{ font-size: 1.4em; }}
+    .header p {{ font-size: 0.85em; opacity:.8; margin-top:4px; }}
+    .container {{ max-width: 900px; margin: 20px auto; padding: 0 12px; }}
+    table {{ width:100%; border-collapse:collapse; background:#fff; border-radius:12px;
+             overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.08); }}
+    th {{ background:#1A73E8; color:#fff; padding:10px 12px; text-align:left; font-size:.85em; }}
+    td {{ padding:10px 12px; border-bottom:1px solid #f0f0f0; font-size:.85em; vertical-align:top; }}
+    tr:last-child td {{ border-bottom:none; }}
+    tr:hover td {{ background:#f9fbff; }}
+    .empty {{ text-align:center; padding:40px; color:#aaa; }}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>📋 艾薇 每日回報紀錄</h1>
+    <p>最近 {days} 天｜自動更新</p>
+  </div>
+  <div class="container">
+    <table>
+      <thead>
+        <tr>
+          <th>日期</th><th>回報</th><th>姓名</th><th>項目</th><th>狀態</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(html_rows) if html_rows else '<tr><td colspan="5" class="empty">尚無資料</td></tr>'}
+      </tbody>
+    </table>
+  </div>
+</body>
+</html>'''
+    return html
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     signature = request.headers.get('X-Line-Signature', '')
@@ -560,6 +741,7 @@ def handle_text(event):
 
 # ── 排程器 ───────────────────────────────────────────────────
 scheduler = BackgroundScheduler(timezone=TZ)
+scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)
 scheduler.add_job(check_overdue_items,   'cron', hour=8,  minute=30)
 scheduler.add_job(send_morning_prompt,   'cron', hour=9,  minute=0)
 scheduler.add_job(send_morning_reminder, 'cron', hour=10, minute=0)
