@@ -990,6 +990,16 @@ def handle_text(event):
 
 # ── 排程器 ───────────────────────────────────────────────────
 scheduler = BackgroundScheduler(timezone=TZ)
+def self_ping():
+    """每 10 分鐘自我喚醒，防止 Render 免費版睡著"""
+    try:
+        import urllib.request
+        urllib.request.urlopen('https://aivy-line-bot.onrender.com/ping', timeout=10)
+        logger.info('自我喚醒 ping 成功')
+    except Exception as e:
+        logger.warning(f'自我喚醒失敗：{e}')
+
+scheduler.add_job(self_ping,             'interval', minutes=10)
 scheduler.add_job(send_monthly_report,   'cron', day=1, hour=8, minute=0)
 scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)
 scheduler.add_job(check_missing_reports, 'cron', hour=8,  minute=20)
