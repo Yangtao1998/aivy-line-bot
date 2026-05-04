@@ -7,7 +7,7 @@ from datetime import datetime
 from flask import Flask, request, abort
 from linebot.v3 import WebhookHandler
 from linebot.v3.exceptions import InvalidSignatureError
-from linebot.v3.webhooks import MessageEvent, PostbackEvent, TextMessageContent, JoinEvent
+from linebot.v3.webhooks import MessageEvent, TextMessageContent, JoinEvent
 from linebot.v3.messaging import (
     Configuration, ApiClient, MessagingApi,
     ReplyMessageRequest, PushMessageRequest,
@@ -59,16 +59,28 @@ def ensure_today(state):
         state[today] = {
             'morning': {
                 'sent': False,
+                'summary_sent': False,
                 'todos': {},      # manager -> 原始文字
-                'waiting': {},    # user_id -> manager
             },
             'evening': {
                 'sent': False,
+                'summary_sent': False,
                 'reports': {},    # manager -> 原始文字
-                'waiting': {},    # user_id -> manager
             },
         }
     return state, today
+
+# ── 使用者身份對應 ────────────────────────────────────────────
+def register_user(user_id, manager):
+    state = load_state()
+    if '_user_map' not in state:
+        state['_user_map'] = {}
+    state['_user_map'][user_id] = manager
+    save_state(state)
+
+def get_manager_for_user(user_id):
+    state = load_state()
+    return state.get('_user_map', {}).get(user_id)
 
 # ── 早晨狀態 ─────────────────────────────────────────────────
 def mark_morning_sent():
@@ -77,28 +89,28 @@ def mark_morning_sent():
     state[today]['morning']['sent'] = True
     save_state(state)
 
-def set_waiting_morning(user_id, manager):
+def mark_morning_summary_sent():
     state = load_state()
     state, today = ensure_today(state)
-    state[today]['morning']['waiting'][user_id] = manager
+    state[today]['morning']['summary_sent'] = True
     save_state(state)
 
-def store_morning_todos(user_id, text):
+def store_morning_todos(manager, text):
     state = load_state()
     state, today = ensure_today(state)
-    morning = state[today]['morning']
-    manager = morning['waiting'].get(user_id)
-    if not manager:
-        return None
-    morning['todos'][manager] = text
-    del morning['waiting'][user_id]
+    state[today]['morning']['todos'][manager] = text
     save_state(state)
-    return manager
 
 def get_morning_todos():
     state = load_state()
     state, today = ensure_today(state)
     return state[today]['morning']['todos']
+
+def is_morning_window():
+    state = load_state()
+    state, today = ensure_today(state)
+    m = state[today]['morning']
+    return m['sent'] and not m['summary_sent']
 
 def get_unreported_morning():
     state = load_state()
@@ -115,28 +127,28 @@ def mark_evening_sent():
     state[today]['evening']['sent'] = True
     save_state(state)
 
-def set_waiting_evening(user_id, manager):
+def mark_evening_summary_sent():
     state = load_state()
     state, today = ensure_today(state)
-    state[today]['evening']['waiting'][user_id] = manager
+    state[today]['evening']['summary_sent'] = True
     save_state(state)
 
-def store_evening_report(user_id, text):
+def store_evening_report(manager, text):
     state = load_state()
     state, today = ensure_today(state)
-    evening = state[today]['evening']
-    manager = evening['waiting'].get(user_id)
-    if not manager:
-        return None
-    evening['reports'][manager] = text
-    del evening['waiting'][user_id]
+    state[today]['evening']['reports'][manager] = text
     save_state(state)
-    return manager
 
 def get_evening_reports():
     state = load_state()
     state, today = ensure_today(state)
     return state[today]['evening']['reports']
+
+def is_evening_window():
+    state = load_state()
+    state, today = ensure_today(state)
+    e = state[today]['evening']
+    return e['sent'] and not e['summary_sent']
 
 def get_unreported_evening():
     state = load_state()
@@ -147,53 +159,27 @@ def get_unreported_evening():
     return [m for m in MANAGERS if m not in reported]
 
 # ── Flex Message 建立 ────────────────────────────────────────
-def build_morning_prompt_flex():
-    bubble = {
-        "type": "bubble",
-        "header": {
-            "type": "box", "layout": "vertical",
-            "backgroundColor": "#06C755", "paddingAll": "lg",
-            "contents": [{"type": "text", "text": "☀️ 早安！請回報今日待辦事項",
-                          "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True}]
-        },
-        "body": {
-            "type": "box", "layout": "vertical", "paddingAll": "lg", "spacing": "md",
-            "contents": [
-                {"type": "text",
-                 "text": "請點選自己的名字，再輸入今日待辦事項",
-                 "size": "sm", "color": "#555555", "wrap": True},
-                {"type": "text",
-                 "text": "格式範例：\n1. 盤點配件庫存\n2. 同步官網庫存\n3. 整理展示機台",
-                 "size": "sm", "color": "#888888", "wrap": True, "margin": "md"},
-                {"type": "separator", "margin": "md"},
-                *[{
-                    "type": "button",
-                    "action": {"type": "postback",
-                               "label": f"📋 我是 {mgr}，開始回報",
-                               "data": f"action=morning_id&manager={mgr}"},
-                    "style": "primary", "color": "#06C755", "margin": "sm", "height": "sm"
-                } for mgr in MANAGERS]
-            ]
-        }
-    }
-    return FlexMessage(alt_text="早安！請回報今日待辦事項",
-                       contents=FlexContainer.from_dict(bubble))
-
 def build_morning_summary_flex(todos):
     today = today_key()
     rows = []
     for mgr in MANAGERS:
         if mgr in todos:
-            rows.append({"type": "text", "text": f"✅ {mgr}",
-                         "weight": "bold", "size": "sm", "color": "#06C755"})
+            rows.append({
+                "type": "text", "text": f"✅  {mgr}",
+                "weight": "bold", "size": "sm", "color": "#06C755"
+            })
             for line in todos[mgr].strip().split('\n'):
                 if line.strip():
-                    rows.append({"type": "text", "text": line.strip(),
-                                 "size": "sm", "color": "#444444",
-                                 "wrap": True, "margin": "xs"})
+                    rows.append({
+                        "type": "text", "text": f"    {line.strip()}",
+                        "size": "sm", "color": "#444444",
+                        "wrap": True, "margin": "xs"
+                    })
         else:
-            rows.append({"type": "text", "text": f"❌ {mgr} 尚未回報",
-                         "weight": "bold", "size": "sm", "color": "#AAAAAA"})
+            rows.append({
+                "type": "text", "text": f"❌  {mgr} 尚未回報",
+                "weight": "bold", "size": "sm", "color": "#BBBBBB"
+            })
         rows.append({"type": "separator", "margin": "md"})
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
@@ -203,66 +189,48 @@ def build_morning_summary_flex(todos):
         "header": {
             "type": "box", "layout": "vertical",
             "backgroundColor": "#1A73E8", "paddingAll": "lg",
-            "contents": [{"type": "text", "text": f"📋 {today} 今日待辦彙整",
-                          "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True}]
+            "contents": [{
+                "type": "text",
+                "text": f"📋  {today}  今日待辦彙整",
+                "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True
+            }]
         },
         "body": {
-            "type": "box", "layout": "vertical", "paddingAll": "lg", "spacing": "sm",
+            "type": "box", "layout": "vertical",
+            "paddingAll": "lg", "spacing": "sm",
             "contents": rows
         }
     }
-    return FlexMessage(alt_text=f"{today} 今日待辦彙整",
-                       contents=FlexContainer.from_dict(bubble))
-
-def build_evening_prompt_flex():
-    bubble = {
-        "type": "bubble",
-        "header": {
-            "type": "box", "layout": "vertical",
-            "backgroundColor": "#5C5CE6", "paddingAll": "lg",
-            "contents": [{"type": "text", "text": "🌙 請回報今日完成狀況",
-                          "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True}]
-        },
-        "body": {
-            "type": "box", "layout": "vertical", "paddingAll": "lg", "spacing": "md",
-            "contents": [
-                {"type": "text",
-                 "text": "請點選自己的名字，再逐項回報完成狀況",
-                 "size": "sm", "color": "#555555", "wrap": True},
-                {"type": "text",
-                 "text": "格式範例：\n✅ 盤點配件庫存\n✅ 同步官網庫存\n❌ 整理展示機台（客人太多）",
-                 "size": "sm", "color": "#888888", "wrap": True, "margin": "md"},
-                {"type": "separator", "margin": "md"},
-                *[{
-                    "type": "button",
-                    "action": {"type": "postback",
-                               "label": f"📝 我是 {mgr}，開始回報",
-                               "data": f"action=evening_id&manager={mgr}"},
-                    "style": "primary", "color": "#5C5CE6", "margin": "sm", "height": "sm"
-                } for mgr in MANAGERS]
-            ]
-        }
-    }
-    return FlexMessage(alt_text="請回報今日完成狀況",
-                       contents=FlexContainer.from_dict(bubble))
+    return FlexMessage(
+        alt_text=f"{today} 今日待辦彙整",
+        contents=FlexContainer.from_dict(bubble)
+    )
 
 def build_evening_summary_flex(reports):
     today = today_key()
     rows = []
     for mgr in MANAGERS:
         if mgr in reports:
-            rows.append({"type": "text", "text": mgr,
-                         "weight": "bold", "size": "sm"})
+            rows.append({
+                "type": "text", "text": mgr,
+                "weight": "bold", "size": "sm"
+            })
             for line in reports[mgr].strip().split('\n'):
                 if line.strip():
-                    rows.append({"type": "text", "text": line.strip(),
-                                 "size": "sm", "color": "#444444",
-                                 "wrap": True, "margin": "xs"})
+                    rows.append({
+                        "type": "text", "text": f"    {line.strip()}",
+                        "size": "sm", "color": "#444444",
+                        "wrap": True, "margin": "xs"
+                    })
         else:
-            rows.append({"type": "text", "text": mgr,
-                         "weight": "bold", "size": "sm"})
-            rows.append({"type": "text", "text": "⏳ 未回報",
-                         "size": "sm", "color": "#AAAAAA", "margin": "xs"})
+            rows.append({
+                "type": "text", "text": mgr,
+                "weight": "bold", "size": "sm"
+            })
+            rows.append({
+                "type": "text", "text": "    ⏳ 未回報",
+                "size": "sm", "color": "#BBBBBB", "margin": "xs"
+            })
         rows.append({"type": "separator", "margin": "md"})
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
@@ -272,16 +240,22 @@ def build_evening_summary_flex(reports):
         "header": {
             "type": "box", "layout": "vertical",
             "backgroundColor": "#5C5CE6", "paddingAll": "lg",
-            "contents": [{"type": "text", "text": f"🌙 {today} 今日完成狀況彙整",
-                          "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True}]
+            "contents": [{
+                "type": "text",
+                "text": f"🌙  {today}  今日完成狀況彙整",
+                "weight": "bold", "size": "md", "color": "#FFFFFF", "wrap": True
+            }]
         },
         "body": {
-            "type": "box", "layout": "vertical", "paddingAll": "lg", "spacing": "sm",
+            "type": "box", "layout": "vertical",
+            "paddingAll": "lg", "spacing": "sm",
             "contents": rows
         }
     }
-    return FlexMessage(alt_text=f"{today} 今日完成狀況彙整",
-                       contents=FlexContainer.from_dict(bubble))
+    return FlexMessage(
+        alt_text=f"{today} 今日完成狀況彙整",
+        contents=FlexContainer.from_dict(bubble)
+    )
 
 # ── 推播 / 回覆 ───────────────────────────────────────────────
 def push(msg):
@@ -293,8 +267,10 @@ def push(msg):
 def reply(reply_token, text):
     with ApiClient(configuration) as api_client:
         MessagingApi(api_client).reply_message(
-            ReplyMessageRequest(reply_token=reply_token,
-                                messages=[TextMessage(text=text)])
+            ReplyMessageRequest(
+                reply_token=reply_token,
+                messages=[TextMessage(text=text)]
+            )
         )
 
 # ── 排程任務 ─────────────────────────────────────────────────
@@ -302,7 +278,14 @@ def send_morning_prompt():
     logger.info('發送早晨待辦回報提示')
     try:
         mark_morning_sent()
-        push(build_morning_prompt_flex())
+        push(TextMessage(
+            text="☀️ 早安！請各主管直接在群組輸入今日待辦事項\n\n"
+                 "格式範例：\n"
+                 "1. 盤點配件庫存\n"
+                 "2. 同步官網庫存\n"
+                 "3. 整理展示機台\n\n"
+                 "11:00 將自動彙整今日待辦 📋"
+        ))
     except Exception as e:
         logger.error(f'早晨提示發送失敗：{e}')
 
@@ -312,7 +295,7 @@ def send_morning_reminder():
         return
     names = '、'.join(unreported)
     try:
-        push(TextMessage(text=f"⏰ 提醒：{names} 尚未回報今日待辦事項，請在 11:00 彙整前完成！"))
+        push(TextMessage(text=f"⏰ 提醒：{names} 尚未回報今日待辦事項，請在 11:00 前輸入！"))
         logger.info(f'早晨提醒發送：{names}')
     except Exception as e:
         logger.error(f'早晨提醒失敗：{e}')
@@ -321,6 +304,7 @@ def send_morning_summary():
     todos = get_morning_todos()
     try:
         push(build_morning_summary_flex(todos))
+        mark_morning_summary_sent()
         logger.info('早晨彙整卡發送完成')
     except Exception as e:
         logger.error(f'早晨彙整卡失敗：{e}')
@@ -329,7 +313,14 @@ def send_evening_prompt():
     logger.info('發送晚間完成狀況回報提示')
     try:
         mark_evening_sent()
-        push(build_evening_prompt_flex())
+        push(TextMessage(
+            text="🌙 請各主管直接在群組輸入今日完成狀況\n\n"
+                 "格式範例：\n"
+                 "✅ 盤點配件庫存\n"
+                 "✅ 同步官網庫存\n"
+                 "❌ 整理展示機台（客人太多）\n\n"
+                 "00:00 將自動彙整完成狀況 📋"
+        ))
     except Exception as e:
         logger.error(f'晚間提示發送失敗：{e}')
 
@@ -339,7 +330,7 @@ def send_evening_reminder():
         return
     names = '、'.join(unreported)
     try:
-        push(TextMessage(text=f"⏰ 提醒：{names} 尚未回報今日完成狀況，請在 23:59 前完成！"))
+        push(TextMessage(text=f"⏰ 提醒：{names} 尚未回報今日完成狀況，請在 23:59 前輸入！"))
         logger.info(f'晚間提醒發送：{names}')
     except Exception as e:
         logger.error(f'晚間提醒失敗：{e}')
@@ -348,6 +339,7 @@ def send_evening_summary():
     reports = get_evening_reports()
     try:
         push(build_evening_summary_flex(reports))
+        mark_evening_summary_sent()
         logger.info('晚間彙整卡發送完成')
     except Exception as e:
         logger.error(f'晚間彙整卡失敗：{e}')
@@ -369,66 +361,54 @@ def webhook():
         logger.error(f'Webhook error: {e}')
     return 'OK'
 
-@handler.add(PostbackEvent)
-def handle_postback(event):
-    data = event.postback.data
-    try:
-        params = dict(p.split('=', 1) for p in data.split('&') if '=' in p)
-    except Exception:
-        return
-
-    action  = params.get('action')
-    manager = params.get('manager')
-    user_id = event.source.user_id
-
-    if manager not in MANAGERS:
-        return
-
-    if action == 'morning_id':
-        set_waiting_morning(user_id, manager)
-        reply(event.reply_token,
-              f"👋 {manager}，請直接在群組輸入今日待辦事項（可多行）：\n\n範例：\n1. 盤點配件庫存\n2. 同步官網庫存\n3. 整理展示機台")
-
-    elif action == 'evening_id':
-        set_waiting_evening(user_id, manager)
-        reply(event.reply_token,
-              f"👋 {manager}，請直接在群組逐項回報完成狀況：\n\n範例：\n✅ 盤點配件庫存\n✅ 同步官網庫存\n❌ 整理展示機台（客人太多）")
-
 @handler.add(JoinEvent)
 def handle_join(event):
     group_id = event.source.group_id if hasattr(event.source, 'group_id') else 'N/A'
     logger.info(f'機器人加入群組！Group ID = {group_id}')
     reply(event.reply_token,
-          f"大家好！我是艾薇AI助理 🤖\n"
-          f"09:00 發送待辦回報 → 10:00 提醒 → 11:00 彙整早報\n"
-          f"21:00 發送完成回報 → 23:00 提醒 → 00:00 彙整晚報\n\n"
-          f"📋 Group ID：\n{group_id}")
+          f"大家好！我是艾薇AI助理 🤖\n\n"
+          f"【首次設定】每位主管請輸入：\n"
+          f"我是小陳 / 我是Hank / 我是小羊\n"
+          f"讓我記住你的 LINE ID，之後直接打字就好 ✅\n\n"
+          f"每日時程：\n"
+          f"09:00 早安提示 → 10:00 提醒 → 11:00 彙整早報\n"
+          f"21:00 晚間提示 → 23:00 提醒 → 00:00 彙整晚報")
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
     if not group_id:
         return
+
     user_id = event.source.user_id
     text    = event.message.text.strip()
 
-    state = load_state()
-    state, today = ensure_today(state)
-
-    # 早晨待辦收集
-    if user_id in state[today]['morning']['waiting']:
-        manager = store_morning_todos(user_id, text)
-        if manager:
+    # ── 首次身份註冊 ──────────────────────────────────────────
+    for mgr in MANAGERS:
+        if text in (f'我是{mgr}', f'我是 {mgr}'):
+            register_user(user_id, mgr)
+            logger.info(f'已註冊：{user_id} → {mgr}')
             reply(event.reply_token,
-                  f"✅ 已記錄 {manager} 的今日待辦事項！\n11:00 將彙整今日所有待辦。")
+                  f"✅ 已記住！{mgr} 之後直接在群組打字回報就好，不需要點按鈕 👍")
+            return
+
+    # ── 確認是已知主管 ────────────────────────────────────────
+    manager = get_manager_for_user(user_id)
+    if not manager:
+        return  # 不認識的人，忽略
+
+    # ── 早晨收集視窗（09:00 ~ 11:00）────────────────────────
+    if is_morning_window():
+        store_morning_todos(manager, text)
+        logger.info(f'收到 {manager} 早晨待辦')
+        reply(event.reply_token, f"✅ 收到 {manager} 的今日待辦！11:00 彙整 📋")
         return
 
-    # 晚間完成回報收集
-    if user_id in state[today]['evening']['waiting']:
-        manager = store_evening_report(user_id, text)
-        if manager:
-            reply(event.reply_token,
-                  f"✅ 已記錄 {manager} 的今日完成狀況！\n00:00 將發送今日彙整報告。")
+    # ── 晚間收集視窗（21:00 ~ 00:00）────────────────────────
+    if is_evening_window():
+        store_evening_report(manager, text)
+        logger.info(f'收到 {manager} 晚間回報')
+        reply(event.reply_token, f"✅ 收到 {manager} 的完成回報！00:00 彙整 📋")
         return
 
 # ── 排程器 ───────────────────────────────────────────────────
