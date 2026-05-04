@@ -364,6 +364,18 @@ def trigger_morning_prompt():
     send_morning_prompt()
     return 'morning prompt sent', 200
 
+@app.route('/trigger/reset-morning', methods=['GET'])
+def trigger_reset_morning():
+    state = load_state()
+    state, today = ensure_today(state)
+    state[today]['morning'] = {
+        'sent': True,
+        'summary_sent': False,
+        'todos': {},
+    }
+    save_state(state)
+    return 'morning reset, window re-opened', 200
+
 @app.route('/trigger/evening-prompt', methods=['GET'])
 def trigger_evening_prompt():
     send_evening_prompt()
