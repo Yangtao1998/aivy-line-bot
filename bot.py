@@ -147,6 +147,46 @@ def save_evening_to_db(reports, date_str):
     except Exception as e:
         logger.error(f'晚間資料存入 Supabase 失敗：{e}')
 
+# ── 連續缺報警告 ─────────────────────────────────────────────
+def check_missing_reports():
+    """連續 2 天完全未回報 → 推播提醒 Andy"""
+    if not supabase_client:
+        return
+    try:
+        today = date.today()
+        four_days_ago = (today - timedelta(days=4)).isoformat()
+
+        result = supabase_client.table('daily_reports')\
+            .select('report_date, manager')\
+            .eq('session', 'evening')\
+            .eq('status', 'not_reported')\
+            .gte('report_date', four_days_ago)\
+            .execute()
+
+        missing_dates = defaultdict(set)
+        for row in result.data:
+            missing_dates[row['manager']].add(row['report_date'])
+
+        alerts = []
+        for manager in MANAGERS:
+            consecutive = 0
+            check = today - timedelta(days=1)
+            for _ in range(4):
+                if check.isoformat() in missing_dates[manager]:
+                    consecutive += 1
+                    check -= timedelta(days=1)
+                else:
+                    break
+            if consecutive >= 2:
+                alerts.append(f"🚨 {manager} 已連續 {consecutive} 天未回報，建議主動聯繫了解狀況")
+
+        if alerts:
+            msg = "⚠️ 連續缺報警告\n\n" + '\n'.join(alerts)
+            push(TextMessage(text=msg))
+            logger.info(f'已發送缺報警告：{len(alerts)} 人')
+    except Exception as e:
+        logger.error(f'檢查缺報失敗：{e}')
+
 # ── 週報 ─────────────────────────────────────────────────────
 def send_weekly_report():
     """每週一 08:00 發送上週完成率報告給群組"""
@@ -579,6 +619,11 @@ def trigger_check_overdue():
     check_overdue_items()
     return 'overdue check done', 200
 
+@app.route('/trigger/check-missing', methods=['GET'])
+def trigger_check_missing():
+    check_missing_reports()
+    return 'missing check done', 200
+
 @app.route('/trigger/weekly-report', methods=['GET'])
 def trigger_weekly_report():
     send_weekly_report()
@@ -600,24 +645,63 @@ def dashboard():
 
     rows = result.data or []
 
-    # 整理資料：日期 → 階段 → 人員 → 項目
+    # ── 本週完成率統計 ────────────────────────────────────────
+    mgr_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+    for row in rows:
+        if row['session'] != 'evening' or row['status'] == 'not_reported':
+            continue
+        m = row['manager']
+        if m in mgr_stats:
+            mgr_stats[m]['total'] += 1
+            if row['status'] == 'done':
+                mgr_stats[m]['done'] += 1
+
+    rate_cards = ''
+    for mgr in MANAGERS:
+        s = mgr_stats[mgr]
+        if s['total'] == 0:
+            rate, bar_w, color, label = 0, 0, '#ccc', '無資料'
+        else:
+            rate = int(s['done'] / s['total'] * 100)
+            bar_w = rate
+            color = '#1AAE1A' if rate >= 80 else '#FF9800' if rate >= 60 else '#E53935'
+            label = f"{s['done']}/{s['total']} 件完成"
+        rate_cards += f'''
+        <div class="rate-card">
+          <div class="rate-name">{mgr}</div>
+          <div class="rate-bar-bg"><div class="rate-bar" style="width:{bar_w}%;background:{color}"></div></div>
+          <div class="rate-pct" style="color:{color}">{rate}%</div>
+          <div class="rate-label">{label}</div>
+        </div>'''
+
+    # ── 未完成原因統計 ────────────────────────────────────────
+    reason_count = defaultdict(lambda: defaultdict(int))
+    for row in rows:
+        if row['session'] == 'evening' and row['status'] == 'incomplete' and row.get('reason'):
+            reason_count[row['manager']][row['reason']] += 1
+
+    reason_rows = ''
+    for mgr in MANAGERS:
+        for reason, cnt in sorted(reason_count[mgr].items(), key=lambda x: -x[1]):
+            badge = f'<span class="badge">{cnt}次</span>' if cnt > 1 else ''
+            reason_rows += f'<tr><td style="font-weight:bold">{mgr}</td><td>{reason} {badge}</td></tr>'
+    if not reason_rows:
+        reason_rows = '<tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px">本週無未完成原因紀錄</td></tr>'
+
+    # ── 每日明細 ─────────────────────────────────────────────
     from collections import OrderedDict
     days_data = OrderedDict()
     for row in rows:
-        d = row['report_date']
-        s = row['session']
-        m = row['manager']
+        d, s, m = row['report_date'], row['session'], row['manager']
         days_data.setdefault(d, {'morning': defaultdict(list), 'evening': defaultdict(list)})
         days_data[d][s][m].append(row)
 
-    STATUS_COLOR = {'done': '#1AAE1A', 'incomplete': '#E53935',
-                    'reported': '#1A73E8', 'not_reported': '#BBBBBB'}
-    STATUS_LABEL = {'done': '✅', 'incomplete': '❌',
-                    'reported': '✅', 'not_reported': '⏳'}
+    STATUS_COLOR = {'done':'#1AAE1A','incomplete':'#E53935','reported':'#1A73E8','not_reported':'#BBBBBB'}
+    STATUS_LABEL = {'done':'✅','incomplete':'❌','reported':'✅','not_reported':'⏳'}
 
-    html_rows = ''
+    detail_rows = ''
     for day, sessions in days_data.items():
-        for session_key, label in [('morning', '☀️ 早報'), ('evening', '🌙 晚報')]:
+        for session_key, label in [('morning','☀️ 早報'),('evening','🌙 晚報')]:
             session_data = sessions[session_key]
             if not session_data:
                 continue
@@ -628,14 +712,14 @@ def dashboard():
                 for i, item in enumerate(items):
                     color  = STATUS_COLOR.get(item['status'], '#888')
                     emoji  = STATUS_LABEL.get(item['status'], '')
-                    reason = f'<br><small style="color:#888">（{item["reason"]}）</small>' if item.get('reason') else ''
-                    html_rows += f'''
-                    <tr>
-                      {"<td rowspan='" + str(len(items)) + "' style='font-weight:bold;color:#333'>" + day + "</td>" if i == 0 else ""}
-                      {"<td rowspan='" + str(len(items)) + "'>" + label + "</td>" if i == 0 else ""}
-                      {"<td rowspan='" + str(len(items)) + "' style='font-weight:bold'>" + mgr + "</td>" if i == 0 else ""}
+                    reason = f'<br><small style="color:#aaa">（{item["reason"]}）</small>' if item.get('reason') else ''
+                    rs = len(items)
+                    detail_rows += f'''<tr>
+                      {"<td rowspan='" + str(rs) + "' style='font-weight:bold;color:#555;white-space:nowrap'>" + day[5:] + "</td>" if i==0 else ""}
+                      {"<td rowspan='" + str(rs) + "'>" + label + "</td>" if i==0 else ""}
+                      {"<td rowspan='" + str(rs) + "' style='font-weight:bold'>" + mgr + "</td>" if i==0 else ""}
                       <td>{item["item_text"]}{reason}</td>
-                      <td style="color:{color};font-weight:bold">{emoji}</td>
+                      <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
                     </tr>'''
 
     html = f'''<!DOCTYPE html>
@@ -643,39 +727,63 @@ def dashboard():
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>艾薇 每日回報紀錄</title>
+  <title>艾薇 回報系統儀表板</title>
   <style>
-    * {{ box-sizing: border-box; margin: 0; padding: 0; }}
-    body {{ font-family: -apple-system, sans-serif; background: #f5f7fa; color: #333; }}
-    .header {{ background: linear-gradient(135deg,#1A73E8,#5C5CE6); color:#fff; padding: 20px; text-align:center; }}
-    .header h1 {{ font-size: 1.4em; }}
-    .header p {{ font-size: 0.85em; opacity:.8; margin-top:4px; }}
-    .container {{ max-width: 900px; margin: 20px auto; padding: 0 12px; }}
-    table {{ width:100%; border-collapse:collapse; background:#fff; border-radius:12px;
-             overflow:hidden; box-shadow:0 2px 8px rgba(0,0,0,.08); }}
-    th {{ background:#1A73E8; color:#fff; padding:10px 12px; text-align:left; font-size:.85em; }}
-    td {{ padding:10px 12px; border-bottom:1px solid #f0f0f0; font-size:.85em; vertical-align:top; }}
-    tr:last-child td {{ border-bottom:none; }}
-    tr:hover td {{ background:#f9fbff; }}
-    .empty {{ text-align:center; padding:40px; color:#aaa; }}
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:-apple-system,sans-serif;background:#f0f4f8;color:#333}}
+    .header{{background:linear-gradient(135deg,#1A73E8,#5C5CE6);color:#fff;padding:24px;text-align:center}}
+    .header h1{{font-size:1.4em;font-weight:700}}
+    .header p{{font-size:.8em;opacity:.8;margin-top:4px}}
+    .container{{max-width:900px;margin:20px auto;padding:0 12px}}
+    .section-title{{font-size:.95em;font-weight:700;color:#555;margin:20px 0 10px;padding-left:4px}}
+
+    /* 完成率卡片 */
+    .rate-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}}
+    .rate-card{{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
+    .rate-name{{font-weight:700;font-size:.95em;margin-bottom:8px}}
+    .rate-bar-bg{{background:#eee;border-radius:99px;height:8px;margin-bottom:6px}}
+    .rate-bar{{height:8px;border-radius:99px;transition:width .5s}}
+    .rate-pct{{font-size:1.5em;font-weight:700;margin-bottom:2px}}
+    .rate-label{{font-size:.75em;color:#888}}
+
+    /* 原因表 */
+    .card{{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;margin-bottom:8px}}
+    table{{width:100%;border-collapse:collapse}}
+    th{{background:#5C5CE6;color:#fff;padding:10px 14px;text-align:left;font-size:.82em}}
+    td{{padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:.83em;vertical-align:top}}
+    tr:last-child td{{border-bottom:none}}
+    tr:hover td{{background:#f8f9ff}}
+    .badge{{display:inline-block;background:#E53935;color:#fff;border-radius:99px;
+            padding:1px 7px;font-size:.72em;margin-left:4px;vertical-align:middle}}
+    .empty{{text-align:center;padding:30px;color:#bbb;font-size:.85em}}
   </style>
 </head>
 <body>
   <div class="header">
-    <h1>📋 艾薇 每日回報紀錄</h1>
-    <p>最近 {days} 天｜自動更新</p>
+    <h1>📋 艾薇 回報系統儀表板</h1>
+    <p>最近 {days} 天（{since[5:]} ~ 今天）</p>
   </div>
   <div class="container">
-    <table>
-      <thead>
-        <tr>
-          <th>日期</th><th>回報</th><th>姓名</th><th>項目</th><th>狀態</th>
-        </tr>
-      </thead>
-      <tbody>
-        {"".join(html_rows) if html_rows else '<tr><td colspan="5" class="empty">尚無資料</td></tr>'}
-      </tbody>
-    </table>
+
+    <div class="section-title">📊 本週完成率</div>
+    <div class="rate-grid">{rate_cards}</div>
+
+    <div class="section-title">❌ 未完成原因統計</div>
+    <div class="card">
+      <table>
+        <thead><tr><th>姓名</th><th>原因</th></tr></thead>
+        <tbody>{reason_rows}</tbody>
+      </table>
+    </div>
+
+    <div class="section-title">📅 每日回報明細</div>
+    <div class="card">
+      <table>
+        <thead><tr><th>日期</th><th>回報</th><th>姓名</th><th>項目</th><th style="text-align:center">狀態</th></tr></thead>
+        <tbody>{"".join(detail_rows) if detail_rows else '<tr><td colspan="5" class="empty">尚無資料</td></tr>'}</tbody>
+      </table>
+    </div>
+
   </div>
 </body>
 </html>'''
@@ -742,6 +850,7 @@ def handle_text(event):
 # ── 排程器 ───────────────────────────────────────────────────
 scheduler = BackgroundScheduler(timezone=TZ)
 scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)
+scheduler.add_job(check_missing_reports, 'cron', hour=8,  minute=20)
 scheduler.add_job(check_overdue_items,   'cron', hour=8,  minute=30)
 scheduler.add_job(send_morning_prompt,   'cron', hour=9,  minute=0)
 scheduler.add_job(send_morning_reminder, 'cron', hour=10, minute=0)
