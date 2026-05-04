@@ -147,6 +147,94 @@ def save_evening_to_db(reports, date_str):
     except Exception as e:
         logger.error(f'晚間資料存入 Supabase 失敗：{e}')
 
+# ── 昨日未完成結轉 ───────────────────────────────────────────
+def get_yesterday_incomplete():
+    """取得昨日未完成項目，依主管分組"""
+    if not supabase_client:
+        return {}
+    yesterday = (date.today() - timedelta(days=1)).isoformat()
+    try:
+        result = supabase_client.table('daily_reports')\
+            .select('manager, item_text')\
+            .eq('report_date', yesterday)\
+            .eq('session', 'evening')\
+            .eq('status', 'incomplete')\
+            .execute()
+        by_mgr = defaultdict(list)
+        for row in result.data:
+            by_mgr[row['manager']].append(row['item_text'])
+        return dict(by_mgr)
+    except Exception as e:
+        logger.error(f'取得昨日未完成失敗：{e}')
+        return {}
+
+# ── 月度報告 ──────────────────────────────────────────────────
+def send_monthly_report():
+    """每月 1 號 08:00 發送上月完成率報告"""
+    if not supabase_client:
+        return
+    try:
+        today = date.today()
+        if today.month == 1:
+            m_start = date(today.year - 1, 12, 1)
+            m_end   = date(today.year, 1, 1) - timedelta(days=1)
+        else:
+            m_start = date(today.year, today.month - 1, 1)
+            m_end   = date(today.year, today.month, 1) - timedelta(days=1)
+
+        result = supabase_client.table('daily_reports')\
+            .select('manager, status, item_text')\
+            .eq('session', 'evening')\
+            .gte('report_date', m_start.isoformat())\
+            .lte('report_date', m_end.isoformat())\
+            .execute()
+
+        if not result.data:
+            push(TextMessage(text=f"📊 {m_start.month}月 尚無回報資料"))
+            return
+
+        stats = defaultdict(lambda: {'done': 0, 'total': 0})
+        incomplete_cnt = defaultdict(lambda: defaultdict(int))
+        skip = {'休假', '（未回報）'}
+
+        for row in result.data:
+            if row['item_text'] in skip or row['status'] == 'not_reported':
+                continue
+            m = row['manager']
+            stats[m]['total'] += 1
+            if row['status'] == 'done':
+                stats[m]['done'] += 1
+            elif row['status'] == 'incomplete':
+                incomplete_cnt[m][row['item_text']] += 1
+
+        month_label = f"{m_start.year}/{m_start.month}月"
+        lines = [f"📊 {month_label} 月度完成率報告\n"]
+
+        for mgr in MANAGERS:
+            s = stats.get(mgr, {'done': 0, 'total': 0})
+            if s['total'] == 0:
+                lines.append(f"{mgr}：無資料")
+                continue
+            rate = int(s['done'] / s['total'] * 100)
+            bar = '█' * (rate // 10) + '░' * (10 - rate // 10)
+            lines.append(f"{mgr}  {bar} {rate}%")
+
+        all_inc = []
+        for mgr in MANAGERS:
+            for item, cnt in sorted(incomplete_cnt[mgr].items(), key=lambda x: -x[1])[:3]:
+                all_inc.append((mgr, item, cnt))
+
+        if all_inc:
+            lines.append("\n常見未完成項目：")
+            for mgr, item, cnt in sorted(all_inc, key=lambda x: -x[2])[:6]:
+                lines.append(f"• {mgr}：{item}（{cnt}次）")
+
+        lines.append(f"\n詳細紀錄：https://aivy-line-bot.onrender.com/dashboard")
+        push(TextMessage(text='\n'.join(lines)))
+        logger.info('月度報告發送完成')
+    except Exception as e:
+        logger.error(f'月度報告失敗：{e}')
+
 # ── 連續缺報警告 ─────────────────────────────────────────────
 def check_missing_reports():
     """連續 2 天完全未回報 → 推播提醒 Andy"""
@@ -521,8 +609,19 @@ def send_morning_prompt():
     logger.info('發送早晨待辦回報提示')
     try:
         mark_morning_sent()
+        # 帶出昨日未完成結轉
+        yesterday_inc = get_yesterday_incomplete()
+        carry = ''
+        if yesterday_inc:
+            lines = ['⚠️ 昨日未完成項目（請列入今日追蹤）：']
+            for mgr in MANAGERS:
+                for item in yesterday_inc.get(mgr, []):
+                    lines.append(f"  • {mgr}：{item}")
+            carry = '\n'.join(lines) + '\n\n'
+
         push(TextMessage(
-            text="☀️ 早安！請各主管直接在群組輸入今日待辦事項\n\n"
+            text=f"☀️ 早安！請各主管直接在群組輸入今日待辦事項\n\n"
+                 f"{carry}"
                  "格式範例：\n1. 盤點配件庫存\n2. 同步官網庫存\n3. 整理展示機台\n\n"
                  "11:00 將自動彙整今日待辦 📋"
         ))
@@ -624,6 +723,11 @@ def trigger_check_missing():
     check_missing_reports()
     return 'missing check done', 200
 
+@app.route('/trigger/monthly-report', methods=['GET'])
+def trigger_monthly_report():
+    send_monthly_report()
+    return 'monthly report sent', 200
+
 @app.route('/trigger/weekly-report', methods=['GET'])
 def trigger_weekly_report():
     send_weekly_report()
@@ -656,19 +760,52 @@ def dashboard():
             if row['status'] == 'done':
                 mgr_stats[m]['done'] += 1
 
+    # 上週資料（比較趨勢）
+    last_since = (date.today() - timedelta(days=14)).isoformat()
+    last_until = (date.today() - timedelta(days=8)).isoformat()
+    try:
+        last_result = supabase_client.table('daily_reports')\
+            .select('manager, status')\
+            .eq('session', 'evening')\
+            .gte('report_date', last_since)\
+            .lte('report_date', last_until)\
+            .execute()
+        last_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+        for row in last_result.data:
+            if row['status'] == 'not_reported':
+                continue
+            m = row['manager']
+            if m in last_stats:
+                last_stats[m]['total'] += 1
+                if row['status'] == 'done':
+                    last_stats[m]['done'] += 1
+    except Exception:
+        last_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+
+    def trend_arrow(this_rate, last_s):
+        if last_s['total'] == 0:
+            return '', '#888'
+        last_rate = int(last_s['done'] / last_s['total'] * 100)
+        diff = this_rate - last_rate
+        if diff > 5:   return '↑', '#1AAE1A'
+        if diff < -5:  return '↓', '#E53935'
+        return '→', '#888'
+
     rate_cards = ''
     for mgr in MANAGERS:
         s = mgr_stats[mgr]
         if s['total'] == 0:
             rate, bar_w, color, label = 0, 0, '#ccc', '無資料'
+            arrow, a_color = '', '#888'
         else:
             rate = int(s['done'] / s['total'] * 100)
             bar_w = rate
             color = '#1AAE1A' if rate >= 80 else '#FF9800' if rate >= 60 else '#E53935'
             label = f"{s['done']}/{s['total']} 件完成"
+            arrow, a_color = trend_arrow(rate, last_stats[mgr])
         rate_cards += f'''
         <div class="rate-card">
-          <div class="rate-name">{mgr}</div>
+          <div class="rate-name">{mgr} <span style="font-size:1.1em;color:{a_color};font-weight:700">{arrow}</span></div>
           <div class="rate-bar-bg"><div class="rate-bar" style="width:{bar_w}%;background:{color}"></div></div>
           <div class="rate-pct" style="color:{color}">{rate}%</div>
           <div class="rate-label">{label}</div>
@@ -853,6 +990,7 @@ def handle_text(event):
 
 # ── 排程器 ───────────────────────────────────────────────────
 scheduler = BackgroundScheduler(timezone=TZ)
+scheduler.add_job(send_monthly_report,   'cron', day=1, hour=8, minute=0)
 scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)
 scheduler.add_job(check_missing_reports, 'cron', hour=8,  minute=20)
 scheduler.add_job(check_overdue_items,   'cron', hour=8,  minute=30)
