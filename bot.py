@@ -353,6 +353,10 @@ def send_evening_summary():
         logger.error(f'晚間彙整卡失敗：{e}')
 
 # ── Webhook ──────────────────────────────────────────────────
+@app.route('/ping', methods=['GET'])
+def ping():
+    return 'pong', 200
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     signature = request.headers.get('X-Line-Signature', '')
