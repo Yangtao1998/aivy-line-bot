@@ -735,21 +735,51 @@ def trigger_weekly_report():
 
 @app.route('/dashboard', methods=['GET'])
 def dashboard():
-    days = 7
     if not supabase_client:
         return '<h2>Supabase 未連線</h2>', 500
 
-    since = (date.today() - timedelta(days=days)).isoformat()
+    # ── 日期範圍解析 ─────────────────────────────────────────
+    today = date.today()
+    range_param   = request.args.get('range', '7')       # 7 / 14 / 30
+    from_param    = request.args.get('from', '')
+    to_param      = request.args.get('to', '')
+
+    if from_param and to_param:
+        try:
+            date_from = date.fromisoformat(from_param)
+            date_to   = date.fromisoformat(to_param)
+            if date_from > date_to:
+                date_from, date_to = date_to, date_from
+            active_range = 'custom'
+        except ValueError:
+            date_from    = today - timedelta(days=7)
+            date_to      = today
+            active_range = '7'
+    else:
+        try:
+            days = int(range_param)
+        except ValueError:
+            days = 7
+        days         = days if days in (7, 14, 30) else 7
+        date_from    = today - timedelta(days=days - 1)
+        date_to      = today
+        active_range = str(days)
+
+    since_iso = date_from.isoformat()
+    until_iso = date_to.isoformat()
+    span_days  = (date_to - date_from).days + 1
+
     result = supabase_client.table('daily_reports')\
         .select('report_date, manager, session, item_text, status, reason')\
-        .gte('report_date', since)\
+        .gte('report_date', since_iso)\
+        .lte('report_date', until_iso)\
         .order('report_date', desc=True)\
         .order('manager')\
         .execute()
 
     rows = result.data or []
 
-    # ── 本週完成率統計 ────────────────────────────────────────
+    # ── 完成率統計（選取區間） ────────────────────────────────
     mgr_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
@@ -760,15 +790,15 @@ def dashboard():
             if row['status'] == 'done':
                 mgr_stats[m]['done'] += 1
 
-    # 上週資料（比較趨勢）
-    last_since = (date.today() - timedelta(days=14)).isoformat()
-    last_until = (date.today() - timedelta(days=8)).isoformat()
+    # 趨勢比較：取同等長度的前一段
+    prev_to   = date_from - timedelta(days=1)
+    prev_from = prev_to - timedelta(days=span_days - 1)
     try:
         last_result = supabase_client.table('daily_reports')\
             .select('manager, status')\
             .eq('session', 'evening')\
-            .gte('report_date', last_since)\
-            .lte('report_date', last_until)\
+            .gte('report_date', prev_from.isoformat())\
+            .lte('report_date', prev_to.isoformat())\
             .execute()
         last_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
         for row in last_result.data:
@@ -812,22 +842,20 @@ def dashboard():
         </div>'''
 
     # ── 未完成原因統計 ────────────────────────────────────────
-    incomplete_items = []
-    for row in rows:
-        if row['session'] == 'evening' and row['status'] == 'incomplete':
-            incomplete_items.append(row)
-    incomplete_items.sort(key=lambda x: (x['manager'], x['report_date']), reverse=False)
+    incomplete_items = [r for r in rows if r['session'] == 'evening' and r['status'] == 'incomplete']
+    incomplete_items.sort(key=lambda x: (x['manager'], x['report_date']))
 
     reason_rows = ''
     for row in incomplete_items:
         reason = row.get('reason', '') or '（未說明）'
         reason_rows += f'''<tr>
           <td style="font-weight:bold;white-space:nowrap">{row["manager"]}</td>
+          <td style="white-space:nowrap;color:#888">{row["report_date"][5:]}</td>
           <td>{row["item_text"]}</td>
           <td style="color:#888">{reason}</td>
         </tr>'''
     if not reason_rows:
-        reason_rows = '<tr><td colspan="3" style="text-align:center;color:#aaa;padding:20px">本週無未完成紀錄</td></tr>'
+        reason_rows = '<tr><td colspan="4" style="text-align:center;color:#aaa;padding:20px">此區間無未完成紀錄 🎉</td></tr>'
 
     # ── 每日明細 ─────────────────────────────────────────────
     from collections import OrderedDict
@@ -863,6 +891,18 @@ def dashboard():
                       <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
                     </tr>'''
 
+    # ── 時間軸選擇器 HTML ─────────────────────────────────────
+    range_label_map = {'7':'近 7 天', '14':'近 14 天', '30':'近 30 天', 'custom':'自訂'}
+    current_label   = range_label_map.get(active_range, '自訂')
+    date_from_str   = date_from.isoformat()
+    date_to_str     = date_to.isoformat()
+
+    btn = lambda r, label: (
+        f'<a href="/dashboard?range={r}" class="range-btn active">{label}</a>'
+        if active_range == r else
+        f'<a href="/dashboard?range={r}" class="range-btn">{label}</a>'
+    )
+
     html = f'''<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
@@ -872,11 +912,30 @@ def dashboard():
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{font-family:-apple-system,sans-serif;background:#f0f4f8;color:#333}}
-    .header{{background:linear-gradient(135deg,#1A73E8,#5C5CE6);color:#fff;padding:24px;text-align:center}}
+    .header{{background:linear-gradient(135deg,#1A73E8,#5C5CE6);color:#fff;padding:20px 24px 16px;text-align:center}}
     .header h1{{font-size:1.4em;font-weight:700}}
     .header p{{font-size:.8em;opacity:.8;margin-top:4px}}
     .container{{max-width:900px;margin:20px auto;padding:0 12px}}
     .section-title{{font-size:.95em;font-weight:700;color:#555;margin:20px 0 10px;padding-left:4px}}
+
+    /* 時間軸選擇器 */
+    .time-bar{{background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);
+               padding:14px 16px;margin-bottom:18px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}}
+    .time-bar-label{{font-size:.8em;font-weight:700;color:#888;margin-right:4px;white-space:nowrap}}
+    .range-btn{{padding:6px 14px;border-radius:99px;border:1.5px solid #d0d6e8;font-size:.82em;
+                font-weight:600;color:#5C5CE6;text-decoration:none;transition:.15s;white-space:nowrap}}
+    .range-btn:hover{{background:#f0f0ff;border-color:#5C5CE6}}
+    .range-btn.active{{background:#5C5CE6;color:#fff;border-color:#5C5CE6}}
+    .divider{{width:1px;height:20px;background:#e0e0e0;margin:0 4px}}
+    .custom-form{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
+    .custom-form input[type=date]{{
+      padding:5px 10px;border:1.5px solid #d0d6e8;border-radius:8px;font-size:.82em;
+      color:#333;background:#f8f9ff;outline:none;cursor:pointer}}
+    .custom-form input[type=date]:focus{{border-color:#5C5CE6}}
+    .custom-form button{{padding:6px 14px;border-radius:99px;border:none;
+      background:#5C5CE6;color:#fff;font-size:.82em;font-weight:700;cursor:pointer}}
+    .custom-form button:hover{{background:#4a4acf}}
+    .range-tag{{font-size:.78em;color:#888;margin-left:auto;white-space:nowrap}}
 
     /* 完成率卡片 */
     .rate-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}}
@@ -887,32 +946,46 @@ def dashboard():
     .rate-pct{{font-size:1.5em;font-weight:700;margin-bottom:2px}}
     .rate-label{{font-size:.75em;color:#888}}
 
-    /* 原因表 */
+    /* 表格 */
     .card{{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;margin-bottom:8px}}
     table{{width:100%;border-collapse:collapse}}
     th{{background:#5C5CE6;color:#fff;padding:10px 14px;text-align:left;font-size:.82em}}
     td{{padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:.83em;vertical-align:top}}
     tr:last-child td{{border-bottom:none}}
     tr:hover td{{background:#f8f9ff}}
-    .badge{{display:inline-block;background:#E53935;color:#fff;border-radius:99px;
-            padding:1px 7px;font-size:.72em;margin-left:4px;vertical-align:middle}}
     .empty{{text-align:center;padding:30px;color:#bbb;font-size:.85em}}
   </style>
 </head>
 <body>
   <div class="header">
     <h1>📋 艾薇 回報系統儀表板</h1>
-    <p>最近 {days} 天（{since[5:]} ~ 今天）</p>
+    <p>{since_iso[5:]} ～ {until_iso[5:]}　共 {span_days} 天</p>
   </div>
   <div class="container">
 
-    <div class="section-title">📊 本週完成率</div>
+    <!-- 時間軸選擇器 -->
+    <div class="time-bar">
+      <span class="time-bar-label">📅 時間軸</span>
+      {btn('7',  '近 7 天')}
+      {btn('14', '近 14 天')}
+      {btn('30', '近 30 天')}
+      <div class="divider"></div>
+      <form class="custom-form" method="get" action="/dashboard">
+        <input type="date" name="from" value="{date_from_str}" max="{today.isoformat()}">
+        <span style="color:#aaa;font-size:.85em">～</span>
+        <input type="date" name="to"   value="{date_to_str}"   max="{today.isoformat()}">
+        <button type="submit">{'✔ 套用' if active_range == 'custom' else '自訂'}</button>
+      </form>
+      <span class="range-tag">目前：{current_label}</span>
+    </div>
+
+    <div class="section-title">📊 完成率（{current_label}）</div>
     <div class="rate-grid">{rate_cards}</div>
 
     <div class="section-title">❌ 未完成原因統計</div>
     <div class="card">
       <table>
-        <thead><tr><th>姓名</th><th>任務</th><th>未完成原因</th></tr></thead>
+        <thead><tr><th>姓名</th><th>日期</th><th>任務</th><th>未完成原因</th></tr></thead>
         <tbody>{reason_rows}</tbody>
       </table>
     </div>
