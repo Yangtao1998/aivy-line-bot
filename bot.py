@@ -675,18 +675,22 @@ def dashboard():
         </div>'''
 
     # ── 未完成原因統計 ────────────────────────────────────────
-    reason_count = defaultdict(lambda: defaultdict(int))
+    incomplete_items = []
     for row in rows:
-        if row['session'] == 'evening' and row['status'] == 'incomplete' and row.get('reason'):
-            reason_count[row['manager']][row['reason']] += 1
+        if row['session'] == 'evening' and row['status'] == 'incomplete':
+            incomplete_items.append(row)
+    incomplete_items.sort(key=lambda x: (x['manager'], x['report_date']), reverse=False)
 
     reason_rows = ''
-    for mgr in MANAGERS:
-        for reason, cnt in sorted(reason_count[mgr].items(), key=lambda x: -x[1]):
-            badge = f'<span class="badge">{cnt}次</span>' if cnt > 1 else ''
-            reason_rows += f'<tr><td style="font-weight:bold">{mgr}</td><td>{reason} {badge}</td></tr>'
+    for row in incomplete_items:
+        reason = row.get('reason', '') or '（未說明）'
+        reason_rows += f'''<tr>
+          <td style="font-weight:bold;white-space:nowrap">{row["manager"]}</td>
+          <td>{row["item_text"]}</td>
+          <td style="color:#888">{reason}</td>
+        </tr>'''
     if not reason_rows:
-        reason_rows = '<tr><td colspan="2" style="text-align:center;color:#aaa;padding:20px">本週無未完成原因紀錄</td></tr>'
+        reason_rows = '<tr><td colspan="3" style="text-align:center;color:#aaa;padding:20px">本週無未完成紀錄</td></tr>'
 
     # ── 每日明細 ─────────────────────────────────────────────
     from collections import OrderedDict
@@ -771,7 +775,7 @@ def dashboard():
     <div class="section-title">❌ 未完成原因統計</div>
     <div class="card">
       <table>
-        <thead><tr><th>姓名</th><th>原因</th></tr></thead>
+        <thead><tr><th>姓名</th><th>任務</th><th>未完成原因</th></tr></thead>
         <tbody>{reason_rows}</tbody>
       </table>
     </div>
