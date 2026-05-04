@@ -71,7 +71,18 @@ def ensure_today(state):
     return state, today
 
 # ── 使用者身份對應 ────────────────────────────────────────────
+# 從環境變數載入永久綁定（重啟不消失）
+# 格式：LINE_USER_ANDY=Uxxxxxxxx
+STATIC_USER_MAP = {}
+for _mgr, _env in [('Andy', 'LINE_USER_ANDY'), ('小陳', 'LINE_USER_XIAOCHEN'),
+                    ('Hank', 'LINE_USER_HANK'), ('小楊', 'LINE_USER_XIAOYANG')]:
+    _uid = os.environ.get(_env, '').strip()
+    if _uid:
+        STATIC_USER_MAP[_uid] = _mgr
+        logger.info(f'從環境變數載入綁定：{_mgr}')
+
 def register_user(user_id, manager):
+    """暫存到 state.json（在環境變數設定前作為備用）"""
     state = load_state()
     if '_user_map' not in state:
         state['_user_map'] = {}
@@ -79,6 +90,9 @@ def register_user(user_id, manager):
     save_state(state)
 
 def get_manager_for_user(user_id):
+    """優先讀環境變數，再讀 state.json"""
+    if user_id in STATIC_USER_MAP:
+        return STATIC_USER_MAP[user_id]
     state = load_state()
     return state.get('_user_map', {}).get(user_id)
 
@@ -420,8 +434,15 @@ def handle_text(event):
         if text in (f'我是{mgr}', f'我是 {mgr}'):
             register_user(user_id, mgr)
             logger.info(f'已註冊：{user_id} → {mgr}')
-            reply(event.reply_token,
-                  f"✅ 已記住！{mgr} 之後直接在群組打字回報就好，不需要點按鈕 👍")
+            already_permanent = user_id in STATIC_USER_MAP
+            if already_permanent:
+                reply(event.reply_token,
+                      f"✅ {mgr} 身份已永久綁定，直接在群組打字回報即可 👍")
+            else:
+                reply(event.reply_token,
+                      f"✅ 暫時記住 {mgr} 了！\n\n"
+                      f"📋 你的 LINE ID：\n{user_id}\n\n"
+                      f"請把這串 ID 傳給管理員，設定後就永久生效 🔒")
             return
 
     # ── 確認是已知主管 ────────────────────────────────────────
