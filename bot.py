@@ -33,7 +33,7 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler       = WebhookHandler(LINE_CHANNEL_SECRET)
 
 TZ         = pytz.timezone('Asia/Taipei')
-MANAGERS   = ['Andy', '小陳', 'Hank', '小羊']
+MANAGERS   = ['Andy', '小陳', 'Hank', '小楊']
 STATE_FILE = 'state.json'
 
 # ── 狀態管理 ─────────────────────────────────────────────────
