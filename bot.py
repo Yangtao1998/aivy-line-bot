@@ -473,10 +473,26 @@ def get_morning_todos():
     return state[today]['morning']['todos']
 
 def is_morning_window():
+    now = now_taipei()
     state = load_state()
     state, today = ensure_today(state)
     m = state[today]['morning']
-    return m['sent'] and not m['summary_sent']
+    if m['summary_sent']:
+        return False
+    # 正常早晨視窗：09:00 提示發出後
+    if m['sent']:
+        return True
+    # 深夜提前登記視窗：00:00 ~ 08:59（跨日後至上班前）
+    if 0 <= now.hour <= 8:
+        return True
+    return False
+
+def is_prenoon_presubmit():
+    """判斷是否為深夜提前登記（09:00 提示尚未發出）"""
+    now = now_taipei()
+    state = load_state()
+    state, today = ensure_today(state)
+    return 0 <= now.hour <= 8 and not state[today]['morning']['sent']
 
 def get_unreported_morning():
     state = load_state()
@@ -1072,10 +1088,14 @@ def handle_text(event):
     if not manager:
         return
 
-    # 早晨收集視窗
+    # 早晨收集視窗（含深夜 00:00~08:59 提前登記）
     if is_morning_window():
         store_morning_todos(manager, text)
-        reply(event.reply_token, f"✅ 收到 {manager} 的今日待辦！11:00 彙整 📋")
+        if is_prenoon_presubmit():
+            reply(event.reply_token,
+                  f"✅ 收到 {manager} 的今日待辦（提前登記）！\n明早 11:00 彙整早報 📋\n晚安 🌙")
+        else:
+            reply(event.reply_token, f"✅ 收到 {manager} 的今日待辦！11:00 彙整 📋")
         return
 
     # 晚間收集視窗
