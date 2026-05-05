@@ -965,54 +965,52 @@ def dashboard():
           <div style="font-size:.72em;color:#666;line-height:1.6">{sub}</div>
         </div>'''
 
-    # ── ② 連續未完成警示（查最近 30 天）──────────────────────
+    # ── ② 重複未完成追蹤（查最近 30 天，同任務出現 2 次以上）──
     thirty_ago = (today - timedelta(days=30)).isoformat()
     overdue_result = supabase_client.table('daily_reports')\
-        .select('report_date, manager, item_text, status')\
+        .select('report_date, manager, item_text, status, reason')\
         .eq('session', 'evening').eq('status', 'incomplete')\
         .gte('report_date', thirty_ago)\
         .order('report_date', desc=False).execute()
     overdue_rows = overdue_result.data or []
 
-    from itertools import groupby as _groupby
     item_dates = defaultdict(list)
+    item_reasons = defaultdict(list)
     for r in overdue_rows:
-        item_dates[(r['manager'], r['item_text'])].append(r['report_date'])
+        key = (r['manager'], r['item_text'])
+        item_dates[key].append(r['report_date'])
+        if r.get('reason'):
+            item_reasons[key].append(r['reason'])
 
-    consecutive_items = []
+    repeat_items = []
     for (mgr, item), dates in item_dates.items():
         sorted_dates = sorted(set(dates))
-        streak, cur = 1, 1
-        for i in range(1, len(sorted_dates)):
-            d1 = date.fromisoformat(sorted_dates[i-1])
-            d2 = date.fromisoformat(sorted_dates[i])
-            if (d2 - d1).days <= 3:
-                cur += 1
-                streak = max(streak, cur)
-            else:
-                cur = 1
-        if streak >= 3:
-            consecutive_items.append((streak, mgr, item, sorted_dates[0], sorted_dates[-1]))
-    consecutive_items.sort(reverse=True)
+        count = len(sorted_dates)
+        if count >= 2:
+            latest_reason = item_reasons[(mgr, item)][-1] if item_reasons[(mgr, item)] else ''
+            repeat_items.append((count, mgr, item, sorted_dates[0], sorted_dates[-1], latest_reason))
+    repeat_items.sort(reverse=True)
 
     overdue_html = ''
-    for streak, mgr, item, first_date, last_date in consecutive_items[:8]:
-        color = '#E53935' if streak >= 5 else '#FF9800'
-        bg    = '#fff5f5' if streak >= 5 else '#fffaf0'
-        warn  = '⚠️ 建議主動了解狀況' if streak >= 5 else '注意持續追蹤'
+    for count, mgr, item, first_date, last_date, reason in repeat_items[:10]:
+        color = '#E53935' if count >= 4 else '#FF9800' if count >= 3 else '#5C5CE6'
+        bg    = '#fff5f5' if count >= 4 else '#fffaf0' if count >= 3 else '#f5f5ff'
+        warn  = '⚠️ 建議主動了解，已多次未完成' if count >= 4 else '已重複未完成，注意追蹤' if count >= 3 else '出現 2 次，留意後續'
+        reason_tag = f'<div style="font-size:.73em;color:#aaa;margin-top:2px">最近原因：{reason}</div>' if reason else ''
         overdue_html += f'''
         <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;
                     border-radius:10px;border-left:4px solid {color};background:{bg};margin-bottom:8px">
           <span style="background:{color};color:#fff;border-radius:99px;
-                       padding:3px 12px;font-size:.75em;font-weight:700;white-space:nowrap">{streak} 天</span>
+                       padding:3px 12px;font-size:.75em;font-weight:700;white-space:nowrap">{count} 次</span>
           <div style="flex:1">
             <div style="font-weight:700;font-size:.88em">{item}</div>
-            <div style="font-size:.75em;color:#888;margin-top:2px">{mgr}・{first_date[5:]} 起</div>
+            <div style="font-size:.75em;color:#888;margin-top:2px">{mgr}・{first_date[5:]} ～ {last_date[5:]}</div>
             <div style="font-size:.75em;color:{color};margin-top:2px">{warn}</div>
+            {reason_tag}
           </div>
         </div>'''
     if not overdue_html:
-        overdue_html = '<div style="text-align:center;padding:20px;color:#aaa;font-size:.85em">近30天無連續未完成項目 🎉</div>'
+        overdue_html = '<div style="text-align:center;padding:20px;color:#aaa;font-size:.85em">近30天無重複未完成項目 🎉</div>'
 
     # ── ③ 完成率趨勢折線圖（依區間每天計算）─────────────────
     daily_rates = {mgr: {} for mgr in MANAGERS}
@@ -1239,9 +1237,9 @@ def dashboard():
       <canvas id="trendChart" height="200"></canvas>
     </div>
 
-    <!-- ② 連續未完成警示 -->
-    <div class="section-title">🚨 連續未完成警示（近 30 天）</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">同一件任務連續多天未完成自動高亮，依嚴重程度顯示橘色／紅色，讓你快速找到需要追蹤的人</div>
+    <!-- ② 重複未完成追蹤 -->
+    <div class="section-title">🔁 重複未完成追蹤（近 30 天）</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">同一任務在近30天內出現2次以上未完成即列出，依次數顯示紫／橘／紅，讓你快速找到需要追蹤的人</div>
     <div class="card card-body">{overdue_html}</div>
 
     <!-- 未完成原因表 + ④ 分類 -->
