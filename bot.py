@@ -777,9 +777,11 @@ def dashboard():
     if not supabase_client:
         return '<h2>Supabase 未連線</h2>', 500
 
+    import json as _json
+
     # ── 日期範圍解析 ─────────────────────────────────────────
     today = date.today()
-    range_param   = request.args.get('range', '7')       # 7 / 14 / 30
+    range_param   = request.args.get('range', '7')
     from_param    = request.args.get('from', '')
     to_param      = request.args.get('to', '')
 
@@ -930,7 +932,211 @@ def dashboard():
                       <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
                     </tr>'''
 
-    # ── 時間軸選擇器 HTML ─────────────────────────────────────
+    # ── ① 今日快照 ────────────────────────────────────────────
+    today_result = supabase_client.table('daily_reports')\
+        .select('manager, session, item_text, status')\
+        .eq('report_date', today.isoformat()).execute()
+    today_rows = today_result.data or []
+
+    snap_cards = ''
+    for mgr in MANAGERS:
+        mgr_today = [r for r in today_rows if r['manager'] == mgr]
+        evening = [r for r in mgr_today if r['session'] == 'evening']
+        morning = [r for r in mgr_today if r['session'] == 'morning']
+        eve_done  = sum(1 for r in evening if r['status'] == 'done')
+        eve_total = sum(1 for r in evening if r['status'] in ('done','incomplete'))
+        if evening and any(r['status'] in ('done','incomplete') for r in evening):
+            icon, sub, bg = '✅', f'晚報已回報<br>{eve_done}/{eve_total} 件完成', '#f0fff0'
+            border = '#1AAE1A'
+        elif morning and any(r['status'] == 'reported' for r in morning):
+            icon, sub, bg = '📋', '早報已登記<br>等待晚間回報', '#fffbf0'
+            border = '#FF9800'
+        elif any(r['status'] == 'done' and r['item_text'] == '休假' for r in mgr_today):
+            icon, sub, bg = '🏖️', '今日休假', '#f0f8ff'
+            border = '#90CAF9'
+        else:
+            icon, sub, bg = '⏳', '尚未回報<br>—', '#fff5f5'
+            border = '#E53935'
+        snap_cards += f'''
+        <div style="background:{bg};border:1.5px solid {border};border-radius:12px;
+                    padding:16px;text-align:center;box-shadow:0 1px 6px rgba(0,0,0,.05)">
+          <div style="font-weight:700;font-size:.95em;margin-bottom:8px">{mgr}</div>
+          <div style="font-size:1.8em;margin-bottom:6px">{icon}</div>
+          <div style="font-size:.72em;color:#666;line-height:1.6">{sub}</div>
+        </div>'''
+
+    # ── ② 連續未完成警示（查最近 30 天）──────────────────────
+    thirty_ago = (today - timedelta(days=30)).isoformat()
+    overdue_result = supabase_client.table('daily_reports')\
+        .select('report_date, manager, item_text, status')\
+        .eq('session', 'evening').eq('status', 'incomplete')\
+        .gte('report_date', thirty_ago)\
+        .order('report_date', desc=False).execute()
+    overdue_rows = overdue_result.data or []
+
+    from itertools import groupby as _groupby
+    item_dates = defaultdict(list)
+    for r in overdue_rows:
+        item_dates[(r['manager'], r['item_text'])].append(r['report_date'])
+
+    consecutive_items = []
+    for (mgr, item), dates in item_dates.items():
+        sorted_dates = sorted(set(dates))
+        streak, cur = 1, 1
+        for i in range(1, len(sorted_dates)):
+            d1 = date.fromisoformat(sorted_dates[i-1])
+            d2 = date.fromisoformat(sorted_dates[i])
+            if (d2 - d1).days <= 3:
+                cur += 1
+                streak = max(streak, cur)
+            else:
+                cur = 1
+        if streak >= 3:
+            consecutive_items.append((streak, mgr, item, sorted_dates[0], sorted_dates[-1]))
+    consecutive_items.sort(reverse=True)
+
+    overdue_html = ''
+    for streak, mgr, item, first_date, last_date in consecutive_items[:8]:
+        color = '#E53935' if streak >= 5 else '#FF9800'
+        bg    = '#fff5f5' if streak >= 5 else '#fffaf0'
+        warn  = '⚠️ 建議主動了解狀況' if streak >= 5 else '注意持續追蹤'
+        overdue_html += f'''
+        <div style="display:flex;align-items:center;gap:12px;padding:12px 16px;
+                    border-radius:10px;border-left:4px solid {color};background:{bg};margin-bottom:8px">
+          <span style="background:{color};color:#fff;border-radius:99px;
+                       padding:3px 12px;font-size:.75em;font-weight:700;white-space:nowrap">{streak} 天</span>
+          <div style="flex:1">
+            <div style="font-weight:700;font-size:.88em">{item}</div>
+            <div style="font-size:.75em;color:#888;margin-top:2px">{mgr}・{first_date[5:]} 起</div>
+            <div style="font-size:.75em;color:{color};margin-top:2px">{warn}</div>
+          </div>
+        </div>'''
+    if not overdue_html:
+        overdue_html = '<div style="text-align:center;padding:20px;color:#aaa;font-size:.85em">近30天無連續未完成項目 🎉</div>'
+
+    # ── ③ 完成率趨勢折線圖（依區間每天計算）─────────────────
+    daily_rates = {mgr: {} for mgr in MANAGERS}
+    rows_by_date = defaultdict(list)
+    for r in rows:
+        rows_by_date[r['report_date']].append(r)
+
+    chart_labels = []
+    cur = date_from
+    while cur <= date_to:
+        ds = cur.isoformat()
+        chart_labels.append(ds[5:])
+        day_rows = rows_by_date.get(ds, [])
+        for mgr in MANAGERS:
+            mgr_rows = [r for r in day_rows if r['manager'] == mgr and r['session'] == 'evening'
+                        and r['status'] in ('done','incomplete')]
+            if mgr_rows:
+                r_done = sum(1 for r in mgr_rows if r['status'] == 'done')
+                daily_rates[mgr][ds] = round(r_done / len(mgr_rows) * 100)
+            else:
+                daily_rates[mgr][ds] = None
+        cur += timedelta(days=1)
+
+    chart_colors = {'Andy':'#1A73E8','小陳':'#E53935','Hank':'#1AAE1A','小楊':'#FF9800'}
+    datasets_js = []
+    for mgr in MANAGERS:
+        pts = [daily_rates[mgr].get(d) for d in [
+            (date_from + timedelta(days=i)).isoformat() for i in range(span_days)]]
+        datasets_js.append(f'''{{
+          label:'{mgr}',data:{_json.dumps(pts)},
+          borderColor:'{chart_colors[mgr]}',backgroundColor:'{chart_colors[mgr]}22',
+          tension:.4,pointRadius:3,spanGaps:true,fill:false
+        }}''')
+    chart_data_js = f'{{labels:{_json.dumps(chart_labels)},datasets:[{",".join(datasets_js)}]}}'
+
+    # ── ④ 未完成原因分類 ──────────────────────────────────────
+    cat_map = [
+        ('🔥','現場突發',  ['現場','門市','忙','客','插曲','交機','業務']),
+        ('⏰','時間不夠',  ['時間','太久','壓縮','來不及','沒時間','佔用','忙到']),
+        ('🧠','個人因素',  ['靈感','心態','腦袋','個人','沒有','沒辦法','思考']),
+        ('🔗','等待外部',  ['等','待','未','放鳥','尚未','廠商','回覆','入帳']),
+    ]
+    cat_counts = [0]*4
+    all_reasons = [r.get('reason','') for r in incomplete_items if r.get('reason')]
+    for reason in all_reasons:
+        matched = False
+        for i, (_, _, kws) in enumerate(cat_map):
+            if any(kw in reason for kw in kws):
+                cat_counts[i] += 1
+                matched = True
+                break
+        if not matched:
+            cat_counts[0] += 1
+    total_reasons = sum(cat_counts) or 1
+
+    reason_cats_html = ''
+    max_c = max(cat_counts) or 1
+    for i, (icon, name, _) in enumerate(cat_map):
+        c = cat_counts[i]
+        pct = round(c / total_reasons * 100)
+        bar_w = round(c / max_c * 100)
+        reason_cats_html += f'''
+        <div style="background:#f8f9ff;border-radius:10px;padding:14px;text-align:center">
+          <div style="font-size:1.6em;margin-bottom:6px">{icon}</div>
+          <div style="font-size:.8em;font-weight:700;color:#555;margin-bottom:4px">{name}</div>
+          <div style="font-size:1.5em;font-weight:700;color:#5C5CE6">{c}</div>
+          <div style="font-size:.72em;color:#888">佔 {pct}%</div>
+          <div style="height:4px;border-radius:99px;background:#5C5CE6;margin-top:8px;width:{bar_w}%"></div>
+        </div>'''
+
+    # ── ⑤ 每人平均每日任務量 ─────────────────────────────────
+    taskload_html = ''
+    for mgr in MANAGERS:
+        mgr_eve = [r for r in rows if r['manager'] == mgr and r['session'] == 'evening'
+                   and r['status'] in ('done','incomplete')]
+        active_days = len(set(r['report_date'] for r in mgr_eve)) or 1
+        avg = round(len(mgr_eve) / active_days, 1)
+        done_cnt = sum(1 for r in mgr_eve if r['status'] == 'done')
+        rate = round(done_cnt / len(mgr_eve) * 100) if mgr_eve else 0
+        bar_color = '#1AAE1A' if rate >= 80 else '#FF9800' if rate >= 60 else '#E53935'
+        bar_w = min(int(avg / 5 * 100), 100)
+        taskload_html += f'''
+        <div style="background:#f8f9ff;border-radius:10px;padding:14px;text-align:center;
+                    border:1.5px solid #e8eaf6">
+          <div style="font-weight:700;font-size:.9em;margin-bottom:8px">{mgr}</div>
+          <div style="font-size:1.9em;font-weight:700;color:#1A73E8">{avg}</div>
+          <div style="font-size:.72em;color:#888;margin-top:2px">件 / 天</div>
+          <div style="height:6px;background:#eee;border-radius:99px;margin-top:10px">
+            <div style="height:6px;border-radius:99px;background:{bar_color};width:{bar_w}%"></div>
+          </div>
+          <div style="font-size:.72em;color:#888;margin-top:6px">完成率 {rate}%</div>
+        </div>'''
+
+    # ── ⑥ 回報率（有回報的天數 / 區間總天數）────────────────
+    punct_html = ''
+    sorted_mgrs = []
+    for mgr in MANAGERS:
+        reported_days = len(set(
+            r['report_date'] for r in rows
+            if r['manager'] == mgr and r['session'] == 'evening'
+            and r['status'] in ('done','incomplete')
+        ))
+        pct = round(reported_days / span_days * 100)
+        sorted_mgrs.append((pct, mgr, reported_days))
+    sorted_mgrs.sort(reverse=True)
+
+    for pct, mgr, rdays in sorted_mgrs:
+        bar_color = '#1AAE1A' if pct >= 80 else '#FF9800' if pct >= 60 else '#E53935'
+        if pct >= 90:   label, lc = '🏆 最積極', '#1AAE1A'
+        elif pct >= 75: label, lc = '準時', '#888'
+        elif pct >= 60: label, lc = '偶爾缺報', '#FF9800'
+        else:           label, lc = '⚠️ 常缺報', '#E53935'
+        punct_html += f'''
+        <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;
+                    background:#f8f9ff;border-radius:10px;margin-bottom:6px">
+          <div style="font-weight:700;width:44px;font-size:.9em">{mgr}</div>
+          <div style="flex:1;height:10px;background:#eee;border-radius:99px;overflow:hidden">
+            <div style="height:10px;border-radius:99px;background:{bar_color};width:{pct}%"></div>
+          </div>
+          <div style="width:40px;text-align:right;font-weight:700;font-size:.88em;color:{bar_color}">{pct}%</div>
+          <div style="width:80px;text-align:right;font-size:.72em;color:{lc}">{label}</div>
+        </div>'''
+
+    # ── 時間軸選擇器 ─────────────────────────────────────────
     range_label_map = {'7':'近 7 天', '14':'近 14 天', '30':'近 30 天', 'custom':'自訂'}
     current_label   = range_label_map.get(active_range, '自訂')
     date_from_str   = date_from.isoformat()
@@ -948,16 +1154,25 @@ def dashboard():
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>艾薇 回報系統儀表板</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{font-family:-apple-system,sans-serif;background:#f0f4f8;color:#333}}
     .header{{background:linear-gradient(135deg,#1A73E8,#5C5CE6);color:#fff;padding:20px 24px 16px;text-align:center}}
     .header h1{{font-size:1.4em;font-weight:700}}
     .header p{{font-size:.8em;opacity:.8;margin-top:4px}}
-    .container{{max-width:900px;margin:20px auto;padding:0 12px}}
-    .section-title{{font-size:.95em;font-weight:700;color:#555;margin:20px 0 10px;padding-left:4px}}
-
-    /* 時間軸選擇器 */
+    .container{{max-width:960px;margin:20px auto;padding:0 14px}}
+    .section-title{{font-size:.95em;font-weight:700;color:#555;margin:22px 0 10px;padding-left:4px}}
+    .card{{background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;margin-bottom:8px}}
+    .card-body{{padding:16px 18px}}
+    .grid4{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}}
+    .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
+    table{{width:100%;border-collapse:collapse}}
+    th{{background:#5C5CE6;color:#fff;padding:10px 14px;text-align:left;font-size:.82em}}
+    td{{padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:.83em;vertical-align:top}}
+    tr:last-child td{{border-bottom:none}}
+    tr:hover td{{background:#f8f9ff}}
+    .empty{{text-align:center;padding:30px;color:#bbb;font-size:.85em}}
     .time-bar{{background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);
                padding:14px 16px;margin-bottom:18px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}}
     .time-bar-label{{font-size:.8em;font-weight:700;color:#888;margin-right:4px;white-space:nowrap}}
@@ -967,16 +1182,12 @@ def dashboard():
     .range-btn.active{{background:#5C5CE6;color:#fff;border-color:#5C5CE6}}
     .divider{{width:1px;height:20px;background:#e0e0e0;margin:0 4px}}
     .custom-form{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
-    .custom-form input[type=date]{{
-      padding:5px 10px;border:1.5px solid #d0d6e8;border-radius:8px;font-size:.82em;
-      color:#333;background:#f8f9ff;outline:none;cursor:pointer}}
+    .custom-form input[type=date]{{padding:5px 10px;border:1.5px solid #d0d6e8;border-radius:8px;
+      font-size:.82em;color:#333;background:#f8f9ff;outline:none;cursor:pointer}}
     .custom-form input[type=date]:focus{{border-color:#5C5CE6}}
     .custom-form button{{padding:6px 14px;border-radius:99px;border:none;
       background:#5C5CE6;color:#fff;font-size:.82em;font-weight:700;cursor:pointer}}
-    .custom-form button:hover{{background:#4a4acf}}
     .range-tag{{font-size:.78em;color:#888;margin-left:auto;white-space:nowrap}}
-
-    /* 完成率卡片 */
     .rate-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}}
     .rate-card{{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
     .rate-name{{font-weight:700;font-size:.95em;margin-bottom:8px}}
@@ -984,15 +1195,7 @@ def dashboard():
     .rate-bar{{height:8px;border-radius:99px;transition:width .5s}}
     .rate-pct{{font-size:1.5em;font-weight:700;margin-bottom:2px}}
     .rate-label{{font-size:.75em;color:#888}}
-
-    /* 表格 */
-    .card{{background:#fff;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;margin-bottom:8px}}
-    table{{width:100%;border-collapse:collapse}}
-    th{{background:#5C5CE6;color:#fff;padding:10px 14px;text-align:left;font-size:.82em}}
-    td{{padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:.83em;vertical-align:top}}
-    tr:last-child td{{border-bottom:none}}
-    tr:hover td{{background:#f8f9ff}}
-    .empty{{text-align:center;padding:30px;color:#bbb;font-size:.85em}}
+    @media(max-width:600px){{.grid2{{grid-template-columns:1fr}}}}
   </style>
 </head>
 <body>
@@ -1012,15 +1215,33 @@ def dashboard():
       <form class="custom-form" method="get" action="/dashboard">
         <input type="date" name="from" value="{date_from_str}" max="{today.isoformat()}">
         <span style="color:#aaa;font-size:.85em">～</span>
-        <input type="date" name="to"   value="{date_to_str}"   max="{today.isoformat()}">
+        <input type="date" name="to" value="{date_to_str}" max="{today.isoformat()}">
         <button type="submit">{'✔ 套用' if active_range == 'custom' else '自訂'}</button>
       </form>
       <span class="range-tag">目前：{current_label}</span>
     </div>
 
+    <!-- ① 今日快照 -->
+    <div class="section-title">🗓 今日快照（{today.isoformat()[5:]}）</div>
+    <div class="card card-body">
+      <div class="grid4">{snap_cards}</div>
+    </div>
+
+    <!-- 完成率卡片 -->
     <div class="section-title">📊 完成率（{current_label}）</div>
     <div class="rate-grid">{rate_cards}</div>
 
+    <!-- ③ 完成率趨勢折線圖 -->
+    <div class="section-title">📈 完成率趨勢</div>
+    <div class="card card-body" style="padding-bottom:12px">
+      <canvas id="trendChart" height="200"></canvas>
+    </div>
+
+    <!-- ② 連續未完成警示 -->
+    <div class="section-title">🚨 連續未完成警示（近 30 天）</div>
+    <div class="card card-body">{overdue_html}</div>
+
+    <!-- 未完成原因表 + ④ 分類 -->
     <div class="section-title">❌ 未完成原因統計</div>
     <div class="card">
       <table>
@@ -1028,7 +1249,30 @@ def dashboard():
         <tbody>{reason_rows}</tbody>
       </table>
     </div>
+    <div class="section-title">🗂 原因分類分析</div>
+    <div class="card card-body">
+      <div class="grid4">{reason_cats_html}</div>
+    </div>
 
+    <!-- ⑤ 任務量 + ⑥ 回報率 -->
+    <div class="grid2">
+      <div>
+        <div class="section-title">📦 平均每日任務量</div>
+        <div class="card card-body">
+          <div class="grid4">{taskload_html}</div>
+        </div>
+      </div>
+      <div>
+        <div class="section-title">📬 晚報回報率</div>
+        <div class="card card-body">{punct_html}
+          <div style="font-size:.72em;color:#aaa;text-align:center;margin-top:8px">
+            有回報天數 ÷ 區間總天數
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 每日明細 -->
     <div class="section-title">📅 每日回報明細</div>
     <div class="card">
       <table>
@@ -1038,6 +1282,21 @@ def dashboard():
     </div>
 
   </div>
+  <script>
+  new Chart(document.getElementById('trendChart'),{{
+    type:'line',
+    data:{chart_data_js},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{legend:{{position:'top',labels:{{font:{{size:12}},padding:14}}}},
+               tooltip:{{callbacks:{{label:c=>` ${{c.dataset.label}}：${{c.raw}}%`}}}}}},
+      scales:{{
+        y:{{min:0,max:100,ticks:{{callback:v=>v+'%',font:{{size:11}}}},grid:{{color:'#f0f0f0'}}}},
+        x:{{ticks:{{font:{{size:11}}}},grid:{{display:false}}}}
+      }}
+    }}
+  }});
+  </script>
 </body>
 </html>'''
     return html
