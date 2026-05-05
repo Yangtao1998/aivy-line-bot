@@ -509,6 +509,22 @@ def get_evening_reports():
     state, today = ensure_today(state)
     return state[today]['evening']['reports']
 
+def get_evening_reports_by_key(date_key):
+    """取得指定日期的晚間回報（用於跨日 00:00 彙整）"""
+    state = load_state()
+    return state.get(date_key, {}).get('evening', {}).get('reports', {})
+
+def mark_evening_summary_sent_by_key(date_key):
+    """標記指定日期晚間彙整已發送"""
+    state = load_state()
+    if date_key not in state:
+        state[date_key] = {
+            'morning': {'sent': False, 'summary_sent': False, 'todos': {}},
+            'evening': {'sent': False, 'summary_sent': False, 'reports': {}},
+        }
+    state[date_key]['evening']['summary_sent'] = True
+    save_state(state)
+
 def is_evening_window():
     state = load_state()
     state, today = ensure_today(state)
@@ -555,8 +571,8 @@ def build_morning_summary_flex(todos):
     return FlexMessage(alt_text=f"{today} 今日待辦彙整",
                        contents=FlexContainer.from_dict(bubble))
 
-def build_evening_summary_flex(reports):
-    today = today_key()
+def build_evening_summary_flex(reports, report_date=None):
+    today = report_date or today_key()
     rows = []
     for mgr in MANAGERS:
         if mgr in reports:
@@ -671,12 +687,19 @@ def send_evening_reminder():
         logger.error(f'晚間提醒失敗：{e}')
 
 def send_evening_summary():
-    reports = get_evening_reports()
+    # 00:00 執行時台北時間已跨日，彙整的是「昨天」的晚間回報
+    now = now_taipei()
+    if now.hour == 0:
+        report_date = (now.date() - timedelta(days=1)).isoformat()
+    else:
+        report_date = now.date().isoformat()
+
+    reports = get_evening_reports_by_key(report_date)
     try:
-        push(build_evening_summary_flex(reports))
-        mark_evening_summary_sent()
-        save_evening_to_db(reports, today_key())
-        logger.info('晚間彙整卡發送並存入資料庫完成')
+        push(build_evening_summary_flex(reports, report_date))
+        mark_evening_summary_sent_by_key(report_date)
+        save_evening_to_db(reports, report_date)
+        logger.info(f'晚間彙整卡發送完成（回報日期：{report_date}）')
     except Exception as e:
         logger.error(f'晚間彙整卡失敗：{e}')
 
