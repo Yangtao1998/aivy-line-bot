@@ -1266,7 +1266,7 @@ def dashboard():
         <div class="section-title">📬 晚報回報率</div>
         <div class="card card-body">{punct_html}
           <div style="font-size:.72em;color:#aaa;text-align:center;margin-top:8px">
-            有回報天數 ÷ 區間總天數
+            準時定義：23:59 前完成晚間回報
           </div>
         </div>
       </div>
