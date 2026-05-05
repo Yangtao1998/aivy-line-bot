@@ -904,8 +904,8 @@ def dashboard():
         days_data.setdefault(d, {'morning': defaultdict(list), 'evening': defaultdict(list)})
         days_data[d][s][m].append(row)
 
-    STATUS_COLOR = {'done':'#1AAE1A','incomplete':'#E53935','reported':'#1A73E8','not_reported':'#BBBBBB'}
-    STATUS_LABEL = {'done':'✅','incomplete':'❌','reported':'✅','not_reported':'⏳'}
+    STATUS_COLOR = {'done':'#1AAE1A','incomplete':'#E53935','reported':'#FF9800','not_reported':'#BBBBBB'}
+    STATUS_LABEL = {'done':'✅','incomplete':'❌','reported':'📋','not_reported':'⏳'}
 
     detail_rows = ''
     for day, sessions in days_data.items():
