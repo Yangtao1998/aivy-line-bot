@@ -1223,6 +1223,7 @@ def dashboard():
 
     <!-- ① 今日快照 -->
     <div class="section-title">🗓 今日快照（{today.isoformat()[5:]}）</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">頁面最頂端一眼看到今天4位主管的回報狀態與完成件數，不用往下滾動</div>
     <div class="card card-body">
       <div class="grid4">{snap_cards}</div>
     </div>
@@ -1233,12 +1234,14 @@ def dashboard():
 
     <!-- ③ 完成率趨勢折線圖 -->
     <div class="section-title">📈 完成率趨勢</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">每人完成率走勢，一眼看出誰在退步、誰在進步，適合月中／月底對焦</div>
     <div class="card card-body" style="padding-bottom:12px">
       <canvas id="trendChart" height="200"></canvas>
     </div>
 
     <!-- ② 連續未完成警示 -->
     <div class="section-title">🚨 連續未完成警示（近 30 天）</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">同一件任務連續多天未完成自動高亮，依嚴重程度顯示橘色／紅色，讓你快速找到需要追蹤的人</div>
     <div class="card card-body">{overdue_html}</div>
 
     <!-- 未完成原因表 + ④ 分類 -->
@@ -1250,6 +1253,7 @@ def dashboard():
       </table>
     </div>
     <div class="section-title">🗂 原因分類分析</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">把未完成原因自動歸類，看哪類問題最常出現，有助於制度面改善</div>
     <div class="card card-body">
       <div class="grid4">{reason_cats_html}</div>
     </div>
@@ -1258,12 +1262,14 @@ def dashboard():
     <div class="grid2">
       <div>
         <div class="section-title">📦 平均每日任務量</div>
+        <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">看誰每天計畫太少或太多（完不成），找出任務設定合理性問題</div>
         <div class="card card-body">
           <div class="grid4">{taskload_html}</div>
         </div>
       </div>
       <div>
         <div class="section-title">📬 晚報回報率</div>
+        <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">統計每人在 23:59 前完成晚間回報的比例，看誰習慣拖到最後一刻才報</div>
         <div class="card card-body">{punct_html}
           <div style="font-size:.72em;color:#aaa;text-align:center;margin-top:8px">
             準時定義：23:59 前完成晚間回報
