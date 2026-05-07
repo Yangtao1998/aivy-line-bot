@@ -947,26 +947,27 @@ def dashboard():
 
     detail_rows = ''
     for day, sessions in days_data.items():
-        for session_key, label in [('morning','☀️ 早報'),('evening','🌙 晚報')]:
-            session_data = sessions[session_key]
-            if not session_data:
+        for mgr in MANAGERS:
+            # 優先顯示晚報（結果），無晚報才退回早報（待確認）
+            evening_items = sessions['evening'].get(mgr, [])
+            morning_items = sessions['morning'].get(mgr, [])
+            items = evening_items if evening_items else morning_items
+            if not items:
                 continue
-            for mgr in MANAGERS:
-                items = session_data.get(mgr, [])
-                if not items:
-                    continue
-                for i, item in enumerate(items):
-                    color  = STATUS_COLOR.get(item['status'], '#888')
-                    emoji  = STATUS_LABEL.get(item['status'], '')
-                    reason = f'<br><small style="color:#aaa">（{item["reason"]}）</small>' if item.get('reason') else ''
-                    rs = len(items)
-                    detail_rows += f'''<tr>
-                      {"<td rowspan='" + str(rs) + "' style='font-weight:bold;color:#555;white-space:nowrap'>" + day[5:] + "</td>" if i==0 else ""}
-                      {"<td rowspan='" + str(rs) + "'>" + label + "</td>" if i==0 else ""}
-                      {"<td rowspan='" + str(rs) + "' style='font-weight:bold'>" + mgr + "</td>" if i==0 else ""}
-                      <td>{item["item_text"]}{reason}</td>
-                      <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
-                    </tr>'''
+            # 若只有早報資料，標示「待確認」提示色
+            is_pending = not evening_items and bool(morning_items)
+            for i, item in enumerate(items):
+                color  = STATUS_COLOR.get(item['status'], '#888')
+                emoji  = STATUS_LABEL.get(item['status'], '')
+                reason = f'<br><small style="color:#aaa">（{item["reason"]}）</small>' if item.get('reason') else ''
+                pending_hint = ' <small style="color:#bbb;font-size:11px">待晚報</small>' if is_pending and i == 0 else ''
+                rs = len(items)
+                detail_rows += f'''<tr>
+                  {"<td rowspan='" + str(rs) + "' style='font-weight:bold;color:#555;white-space:nowrap'>" + day[5:] + "</td>" if i==0 else ""}
+                  {"<td rowspan='" + str(rs) + "' style='font-weight:bold'>" + mgr + pending_hint + "</td>" if i==0 else ""}
+                  <td>{item["item_text"]}{reason}</td>
+                  <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
+                </tr>'''
 
     # ── ① 今日快照 ────────────────────────────────────────────
     today_result = supabase_client.table('daily_reports')\
@@ -1316,8 +1317,8 @@ def dashboard():
     <div class="section-title">📅 每日回報明細</div>
     <div class="card">
       <table>
-        <thead><tr><th>日期</th><th>回報</th><th>姓名</th><th>項目</th><th style="text-align:center">狀態</th></tr></thead>
-        <tbody>{"".join(detail_rows) if detail_rows else '<tr><td colspan="5" class="empty">尚無資料</td></tr>'}</tbody>
+        <thead><tr><th>日期</th><th>姓名</th><th>項目</th><th style="text-align:center">狀態</th></tr></thead>
+        <tbody>{"".join(detail_rows) if detail_rows else '<tr><td colspan="4" class="empty">尚無資料</td></tr>'}</tbody>
       </table>
     </div>
 
