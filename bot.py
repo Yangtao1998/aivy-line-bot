@@ -121,7 +121,10 @@ def parse_evening_report(text):
     return items if items else [{'item': text.strip(), 'status': 'done', 'reason': ''}]
 
 # ── Supabase 寫入 ────────────────────────────────────────────
-def save_morning_to_db(todos, date_str):
+def save_morning_to_db(todos, date_str, carryover=None):
+    """儲存早報資料到 Supabase
+    carryover: {manager: [(item_text, carryover_count), ...]}
+    """
     if not supabase_client:
         return
     try:
@@ -146,6 +149,18 @@ def save_morning_to_db(todos, date_str):
                     'status': 'not_reported',
                     'reason': ''
                 })
+        # 加入自動結轉任務
+        if carryover:
+            for manager, items in carryover.items():
+                for item_text, count in items:
+                    rows.append({
+                        'report_date': date_str,
+                        'manager': manager,
+                        'session': 'morning',
+                        'item_text': item_text,
+                        'status': 'reported',
+                        'reason': f'結轉×{count}'
+                    })
         if rows:
             supabase_client.table('daily_reports').insert(rows).execute()
             logger.info(f'早晨資料已存入 Supabase：{len(rows)} 筆')
@@ -185,7 +200,7 @@ def save_evening_to_db(reports, date_str):
 
 # ── 昨日未完成結轉 ───────────────────────────────────────────
 def get_yesterday_incomplete():
-    """取得昨日未完成項目，依主管分組"""
+    """取得昨日未完成項目，依主管分組（純文字清單，用於早晨提示）"""
     if not supabase_client:
         return {}
     yesterday = (date.today() - timedelta(days=1)).isoformat()
@@ -202,6 +217,69 @@ def get_yesterday_incomplete():
         return dict(by_mgr)
     except Exception as e:
         logger.error(f'取得昨日未完成失敗：{e}')
+        return {}
+
+def get_carryover_items(today_str):
+    """取得需要結轉到今天的任務：昨日晚報 incomplete，且今日早報尚未包含
+    回傳格式：{manager: [(item_text, carryover_count), ...]}
+    carryover_count 從昨日早報的 reason 欄位讀取（格式：'結轉×N'）
+    """
+    if not supabase_client:
+        return {}
+    yesterday = (date.fromisoformat(today_str) - timedelta(days=1)).isoformat()
+    try:
+        # 昨日晚報未完成
+        eve_result = supabase_client.table('daily_reports')\
+            .select('manager, item_text')\
+            .eq('report_date', yesterday)\
+            .eq('session', 'evening')\
+            .eq('status', 'incomplete')\
+            .execute()
+        if not eve_result.data:
+            return {}
+
+        # 昨日早報（含結轉次數）
+        morn_result = supabase_client.table('daily_reports')\
+            .select('manager, item_text, reason')\
+            .eq('report_date', yesterday)\
+            .eq('session', 'morning')\
+            .execute()
+        # 建立 {(manager, item_text): carryover_count} 的查找表
+        prev_count = {}
+        for row in morn_result.data:
+            r = row.get('reason', '') or ''
+            if r.startswith('結轉×'):
+                try:
+                    cnt = int(r.replace('結轉×', '').strip())
+                except ValueError:
+                    cnt = 1
+            else:
+                cnt = 0
+            prev_count[(row['manager'], row['item_text'])] = cnt
+
+        # 今日早報已登記的項目（避免重複結轉）
+        today_result = supabase_client.table('daily_reports')\
+            .select('manager, item_text')\
+            .eq('report_date', today_str)\
+            .eq('session', 'morning')\
+            .execute()
+        today_items = set(
+            (r['manager'], r['item_text']) for r in (today_result.data or [])
+        )
+
+        by_mgr = defaultdict(list)
+        for row in eve_result.data:
+            mgr, item = row['manager'], row['item_text']
+            if item in ('（未回報）',):
+                continue
+            # 今日早報裡已有這項 → 不重複結轉
+            if (mgr, item) in today_items:
+                continue
+            new_count = prev_count.get((mgr, item), 0) + 1
+            by_mgr[mgr].append((item, new_count))
+        return dict(by_mgr)
+    except Exception as e:
+        logger.error(f'取得結轉任務失敗：{e}')
         return {}
 
 # ── 月度報告 ──────────────────────────────────────────────────
@@ -591,17 +669,29 @@ def get_unreported_evening():
     return [m for m in MANAGERS if m not in state[today]['evening']['reports']]
 
 # ── Flex Message 建立 ────────────────────────────────────────
-def build_morning_summary_flex(todos):
+def build_morning_summary_flex(todos, carryover=None):
+    """carryover: {manager: [(item_text, count), ...]}"""
     today = today_key()
+    carryover = carryover or {}
     rows = []
     for mgr in MANAGERS:
-        if mgr in todos:
+        has_todo = mgr in todos
+        has_carry = mgr in carryover
+        if has_todo or has_carry:
             rows.append({"type": "text", "text": f"✅  {mgr}",
                          "weight": "bold", "size": "sm", "color": "#06C755"})
-            for line in todos[mgr].strip().split('\n'):
-                if line.strip():
-                    rows.append({"type": "text", "text": f"    {line.strip()}",
-                                 "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
+            # 一般待辦
+            if has_todo:
+                for line in todos[mgr].strip().split('\n'):
+                    if line.strip():
+                        rows.append({"type": "text", "text": f"    {line.strip()}",
+                                     "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
+            # 結轉任務
+            if has_carry:
+                for item_text, count in carryover[mgr]:
+                    label = f"    🔁 {item_text}（結轉×{count}）"
+                    rows.append({"type": "text", "text": label,
+                                 "size": "sm", "color": "#7C3AED", "wrap": True, "margin": "xs"})
         else:
             rows.append({"type": "text", "text": f"❌  {mgr} 尚未回報",
                          "weight": "bold", "size": "sm", "color": "#BBBBBB"})
@@ -708,10 +798,16 @@ def send_morning_reminder():
 
 def send_morning_summary():
     todos = get_morning_todos()
+    today = today_key()
+    # 取得需要自動結轉的昨日未完成任務
+    carryover = get_carryover_items(today)
+    if carryover:
+        mgr_list = ', '.join(f"{m}×{len(v)}項" for m, v in carryover.items())
+        logger.info(f'自動結轉任務：{mgr_list}')
     try:
-        push(build_morning_summary_flex(todos))
+        push(build_morning_summary_flex(todos, carryover))
         mark_morning_summary_sent()
-        save_morning_to_db(todos, today_key())
+        save_morning_to_db(todos, today, carryover)
         logger.info('早晨彙整卡發送並存入資料庫完成')
     except Exception as e:
         logger.error(f'早晨彙整卡失敗：{e}')
@@ -959,13 +1055,25 @@ def dashboard():
             for i, item in enumerate(items):
                 color  = STATUS_COLOR.get(item['status'], '#888')
                 emoji  = STATUS_LABEL.get(item['status'], '')
-                reason = f'<br><small style="color:#aaa">（{item["reason"]}）</small>' if item.get('reason') else ''
+                # 結轉標記：morning reason 欄位以 '結轉×' 開頭
+                raw_reason = item.get('reason', '') or ''
+                is_carryover = raw_reason.startswith('結轉×')
+                if is_carryover:
+                    try:
+                        co_count = int(raw_reason.replace('結轉×', '').strip())
+                    except ValueError:
+                        co_count = 1
+                    co_tag = f' <span style="font-size:11px;background:#ede9fe;color:#7C3AED;padding:1px 6px;border-radius:8px;font-weight:600">🔁 結轉×{co_count}</span>'
+                    reason = ''
+                else:
+                    co_tag = ''
+                    reason = f'<br><small style="color:#aaa">（{raw_reason}）</small>' if raw_reason else ''
                 pending_hint = ' <small style="color:#bbb;font-size:11px">待晚報</small>' if is_pending and i == 0 else ''
                 rs = len(items)
                 detail_rows += f'''<tr>
                   {"<td rowspan='" + str(rs) + "' style='font-weight:bold;color:#555;white-space:nowrap'>" + day[5:] + "</td>" if i==0 else ""}
                   {"<td rowspan='" + str(rs) + "' style='font-weight:bold'>" + mgr + pending_hint + "</td>" if i==0 else ""}
-                  <td>{item["item_text"]}{reason}</td>
+                  <td>{item["item_text"]}{co_tag}{reason}</td>
                   <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
                 </tr>'''
 
