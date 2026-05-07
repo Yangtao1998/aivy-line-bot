@@ -64,24 +64,60 @@ def parse_morning_todos(text):
     return items if items else [text.strip()]
 
 def parse_evening_report(text):
-    """把 ✅/❌ 回報文字拆成項目 + 狀態 + 原因"""
-    lines = text.strip().split('\n')
+    """把 ✅/❌ 回報文字拆成項目 + 狀態 + 原因
+
+    支援格式（emoji 可在行首或行尾）：
+      任務✅  /  ✅任務                   → done
+      任務❌  /  ❌任務                   → incomplete
+      任務❌（原因）                       → incomplete，同行括號原因
+      任務❌                              → incomplete
+      原因說明文字（緊接在 ❌ 行後、無 ✅/❌）→ 自動併入上一筆的 reason
+    """
+    DONE_MARKS = ('✅', '✔', '☑')
+    FAIL_MARKS = ('❌', '✗')
+    ALL_MARKS  = DONE_MARKS + FAIL_MARKS
+
+    def has_mark(line, marks):
+        return any(m in line for m in marks)
+
+    def strip_marks(line, marks):
+        for m in marks:
+            line = line.replace(m, '')
+        return line.strip()
+
+    lines = [l.strip() for l in text.strip().split('\n') if l.strip()]
     items = []
-    for line in lines:
-        line = line.strip()
-        if not line:
-            continue
-        if line.startswith('✅') or line.startswith('✔') or line.startswith('☑'):
-            content = line[1:].strip()
-            items.append({'item': content, 'status': 'done', 'reason': ''})
-        elif line.startswith('❌') or line.startswith('✗'):
-            content = line[1:].strip()
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+
+        if has_mark(line, FAIL_MARKS):
+            # 移除所有 ❌ 符號
+            content = strip_marks(line, FAIL_MARKS)
+            # 提取同行括號原因
             match = re.search(r'[（(](.+?)[）)]', content)
             reason = match.group(1) if match else ''
             item_text = re.sub(r'\s*[（(].+?[）)]\s*', '', content).strip()
+
+            # 檢查下一行：若無 ✅/❌，視為原因說明，合併並跳過
+            if not reason and i + 1 < len(lines):
+                next_line = lines[i + 1]
+                if not has_mark(next_line, ALL_MARKS):
+                    reason = next_line
+                    i += 1  # 跳過原因行
+
             items.append({'item': item_text, 'status': 'incomplete', 'reason': reason})
+
+        elif has_mark(line, DONE_MARKS):
+            content = strip_marks(line, DONE_MARKS)
+            items.append({'item': content, 'status': 'done', 'reason': ''})
+
         else:
+            # 純文字行（無 ✅/❌）→ 預設完成
             items.append({'item': line, 'status': 'done', 'reason': ''})
+
+        i += 1
+
     return items if items else [{'item': text.strip(), 'status': 'done', 'reason': ''}]
 
 # ── Supabase 寫入 ────────────────────────────────────────────
