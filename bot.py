@@ -1193,37 +1193,91 @@ def dashboard():
 
     # ── ④ 未完成原因分類 ──────────────────────────────────────
     cat_map = [
-        ('🔥','現場突發',  ['現場','門市','忙','客','插曲','交機','業務']),
-        ('⏰','時間不夠',  ['時間','太久','壓縮','來不及','沒時間','佔用','忙到']),
-        ('🧠','個人因素',  ['靈感','心態','腦袋','個人','沒有','沒辦法','思考']),
-        ('🔗','等待外部',  ['等','待','未','放鳥','尚未','廠商','回覆','入帳']),
+        ('🔥','現場突發',  '#E53935', ['現場','門市','忙','客','插曲','交機','業務']),
+        ('⏰','時間不夠',  '#FF9800', ['時間','太久','壓縮','來不及','沒時間','佔用','忙到']),
+        ('🧠','個人因素',  '#7C3AED', ['靈感','心態','腦袋','個人','沒有','沒辦法','思考']),
+        ('🔗','等待外部',  '#1A73E8', ['等','待','未','放鳥','尚未','廠商','回覆','入帳']),
     ]
-    cat_counts = [0]*4
-    all_reasons = [r.get('reason','') for r in incomplete_items if r.get('reason')]
-    for reason in all_reasons:
+    # cat_items[i] = [(manager, report_date, item_text, reason), ...]
+    cat_items = [[] for _ in cat_map]
+    for row in incomplete_items:
+        reason = row.get('reason', '') or ''
         matched = False
-        for i, (_, _, kws) in enumerate(cat_map):
+        for i, (_, _, _, kws) in enumerate(cat_map):
             if any(kw in reason for kw in kws):
-                cat_counts[i] += 1
+                cat_items[i].append(row)
                 matched = True
                 break
         if not matched:
-            cat_counts[0] += 1
+            cat_items[0].append(row)  # 歸入現場突發
+    cat_counts = [len(c) for c in cat_items]
     total_reasons = sum(cat_counts) or 1
 
     reason_cats_html = ''
     max_c = max(cat_counts) or 1
-    for i, (icon, name, _) in enumerate(cat_map):
+    for i, (icon, name, color, _) in enumerate(cat_map):
         c = cat_counts[i]
         pct = round(c / total_reasons * 100)
         bar_w = round(c / max_c * 100)
+
+        # 人名 chips：統計每人次數
+        mgr_count = defaultdict(int)
+        for row in cat_items[i]:
+            mgr_count[row['manager']] += 1
+        chips_html = ''.join(
+            f'<span style="display:inline-block;background:{color}18;color:{color};'
+            f'border:1px solid {color}44;border-radius:20px;padding:2px 10px;'
+            f'font-size:.72em;font-weight:700;margin:2px 2px 0">'
+            f'{mgr} ×{cnt}</span>'
+            for mgr, cnt in sorted(mgr_count.items(), key=lambda x: -x[1])
+        ) if mgr_count else '<span style="font-size:.72em;color:#ccc">—</span>'
+
+        # 展開明細
+        detail_html = ''
+        for row in sorted(cat_items[i], key=lambda x: (x['manager'], x['report_date'])):
+            dt = row['report_date'][5:]  # MM-DD
+            task = row.get('item_text', '')
+            rsn  = row.get('reason', '') or '（未說明）'
+            detail_html += (
+                f'<tr>'
+                f'<td style="font-weight:600;color:#555;white-space:nowrap">{row["manager"]}</td>'
+                f'<td style="color:#888;white-space:nowrap">{dt}</td>'
+                f'<td>{task}</td>'
+                f'<td style="color:#777;font-size:.85em">{rsn}</td>'
+                f'</tr>'
+            )
+
+        details_block = ''
+        if detail_html:
+            details_block = f'''
+            <details style="margin-top:10px;text-align:left">
+              <summary style="cursor:pointer;font-size:.75em;color:{color};font-weight:600;
+                             list-style:none;padding:4px 0">▶ 展開明細 ({c} 筆)</summary>
+              <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:.78em">
+                <thead><tr style="background:{color}18">
+                  <th style="padding:4px 8px;text-align:left">姓名</th>
+                  <th style="padding:4px 8px;text-align:left">日期</th>
+                  <th style="padding:4px 8px;text-align:left">任務</th>
+                  <th style="padding:4px 8px;text-align:left">原因</th>
+                </tr></thead>
+                <tbody>{detail_html}</tbody>
+              </table>
+            </details>'''
+
         reason_cats_html += f'''
-        <div style="background:#f8f9ff;border-radius:10px;padding:14px;text-align:center">
-          <div style="font-size:1.6em;margin-bottom:6px">{icon}</div>
-          <div style="font-size:.8em;font-weight:700;color:#555;margin-bottom:4px">{name}</div>
-          <div style="font-size:1.5em;font-weight:700;color:#5C5CE6">{c}</div>
-          <div style="font-size:.72em;color:#888">佔 {pct}%</div>
-          <div style="height:4px;border-radius:99px;background:#5C5CE6;margin-top:8px;width:{bar_w}%"></div>
+        <div style="background:#f8f9ff;border-radius:12px;padding:16px;
+                    border-top:3px solid {color}">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+            <span style="font-size:1.4em">{icon}</span>
+            <span style="font-weight:700;color:#333">{name}</span>
+            <span style="margin-left:auto;font-size:1.4em;font-weight:700;color:{color}">{c}</span>
+            <span style="font-size:.75em;color:#aaa">({pct}%)</span>
+          </div>
+          <div style="height:5px;border-radius:99px;background:#eee;margin-bottom:10px">
+            <div style="height:5px;border-radius:99px;background:{color};width:{bar_w}%"></div>
+          </div>
+          <div>{chips_html}</div>
+          {details_block}
         </div>'''
 
     # ── ⑤ 每人平均每日任務量 ─────────────────────────────────
@@ -1396,9 +1450,9 @@ def dashboard():
       </table>
     </div>
     <div class="section-title">🗂 原因分類分析</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">把未完成原因自動歸類，看哪類問題最常出現，有助於制度面改善</div>
+    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">自動歸類未完成原因，顯示各類別的負責人與明細，點「展開明細」可看具體任務與說明</div>
     <div class="card card-body">
-      <div class="grid4">{reason_cats_html}</div>
+      <div class="grid2">{reason_cats_html}</div>
     </div>
 
     <!-- ⑤ 任務量 + ⑥ 回報率 -->
