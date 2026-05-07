@@ -1008,10 +1008,10 @@ def dashboard():
             arrow, a_color = trend_arrow(rate, last_stats[mgr])
         rate_cards += f'''
         <div class="rate-card">
-          <div class="rate-name">{mgr} <span style="font-size:1.1em;color:{a_color};font-weight:700">{arrow}</span></div>
-          <div class="rate-bar-bg"><div class="rate-bar" style="width:{bar_w}%;background:{color}"></div></div>
-          <div class="rate-pct" style="color:{color}">{rate}%</div>
-          <div class="rate-label">{label}</div>
+          <div class="rate-name">{mgr} <span style="color:{a_color};font-size:1.1em">{arrow}</span></div>
+          <div class="rate-num" style="color:{color}">{rate}%</div>
+          <div class="rate-sub">{label}</div>
+          <div class="bar-wrap"><div class="bar-fill" style="width:{bar_w}%;background:{color}"></div></div>
         </div>'''
 
     # ── 未完成原因統計 ────────────────────────────────────────
@@ -1091,23 +1091,17 @@ def dashboard():
         eve_done  = sum(1 for r in evening if r['status'] == 'done')
         eve_total = sum(1 for r in evening if r['status'] in ('done','incomplete'))
         if evening and any(r['status'] in ('done','incomplete') for r in evening):
-            icon, sub, bg = '✅', f'晚報已回報<br>{eve_done}/{eve_total} 件完成', '#f0fff0'
-            border = '#1AAE1A'
+            snap_cls, icon, sub = 'done', '✅', f'晚報已回報・{eve_done}/{eve_total} 完成'
         elif morning and any(r['status'] == 'reported' for r in morning):
-            icon, sub, bg = '📋', '早報已登記<br>等待晚間回報', '#fffbf0'
-            border = '#FF9800'
+            snap_cls, icon, sub = 'pend', '📋', '早報已登記・待晚報'
         elif any(r['status'] == 'done' and r['item_text'] == '休假' for r in mgr_today):
-            icon, sub, bg = '🏖️', '今日休假', '#f0f8ff'
-            border = '#90CAF9'
+            snap_cls, icon, sub = 'none', '🏖️', '今日休假'
         else:
-            icon, sub, bg = '⏳', '尚未回報<br>—', '#fff5f5'
-            border = '#E53935'
+            snap_cls, icon, sub = 'none', '⏳', '尚未回報'
         snap_cards += f'''
-        <div style="background:{bg};border:1.5px solid {border};border-radius:12px;
-                    padding:16px;text-align:center;box-shadow:0 1px 6px rgba(0,0,0,.05)">
-          <div style="font-weight:700;font-size:.95em;margin-bottom:8px">{mgr}</div>
-          <div style="font-size:1.8em;margin-bottom:6px">{icon}</div>
-          <div style="font-size:.72em;color:#666;line-height:1.6">{sub}</div>
+        <div class="snap-card {snap_cls}">
+          <div class="snap-icon-wrap">{icon}</div>
+          <div><div class="snap-name">{mgr}</div><div class="snap-sub">{sub}</div></div>
         </div>'''
 
     # ── ② 重複未完成追蹤（查最近 30 天，同任務出現 2 次以上）──
@@ -1138,8 +1132,8 @@ def dashboard():
 
     overdue_html = ''
     for count, mgr, item, first_date, last_date, reason in repeat_items[:10]:
-        color = '#E53935' if count >= 4 else '#FF9800' if count >= 3 else '#5C5CE6'
-        bg    = '#fff5f5' if count >= 4 else '#fffaf0' if count >= 3 else '#f5f5ff'
+        color = '#dc2626' if count >= 4 else '#ea580c' if count >= 3 else '#2563eb'
+        bg    = '#fef2f2' if count >= 4 else '#fff7ed' if count >= 3 else '#eff6ff'
         warn  = '⚠️ 建議主動了解，已多次未完成' if count >= 4 else '已重複未完成，注意追蹤' if count >= 3 else '出現 2 次，留意後續'
         reason_tag = f'<div style="font-size:.73em;color:#aaa;margin-top:2px">最近原因：{reason}</div>' if reason else ''
         overdue_html += f'''
@@ -1193,17 +1187,17 @@ def dashboard():
 
     # ── ④ 未完成原因分類 ──────────────────────────────────────
     cat_map = [
-        ('🔥','現場突發',  '#E53935', ['現場','門市','忙','客','插曲','交機','業務']),
-        ('⏰','時間不夠',  '#FF9800', ['時間','太久','壓縮','來不及','沒時間','佔用','忙到']),
-        ('🧠','個人因素',  '#7C3AED', ['靈感','心態','腦袋','個人','沒有','沒辦法','思考']),
-        ('🔗','等待外部',  '#1A73E8', ['等','待','未','放鳥','尚未','廠商','回覆','入帳']),
+        ('🔥','現場突發',  '#dc2626', '#fef2f2', '#fecaca', ['現場','門市','忙','客','插曲','交機','業務']),
+        ('⏰','時間不夠',  '#ea580c', '#fff7ed', '#fed7aa', ['時間','太久','壓縮','來不及','沒時間','佔用','忙到']),
+        ('🧠','個人因素',  '#7c3aed', '#faf5ff', '#ddd6fe', ['靈感','心態','腦袋','個人','沒有','沒辦法','思考']),
+        ('🔗','等待外部',  '#2563eb', '#eff6ff', '#bfdbfe', ['等','待','未','放鳥','尚未','廠商','回覆','入帳']),
     ]
     # cat_items[i] = [(manager, report_date, item_text, reason), ...]
     cat_items = [[] for _ in cat_map]
     for row in incomplete_items:
         reason = row.get('reason', '') or ''
         matched = False
-        for i, (_, _, _, kws) in enumerate(cat_map):
+        for i, (_, _, _, _, _, kws) in enumerate(cat_map):
             if any(kw in reason for kw in kws):
                 cat_items[i].append(row)
                 matched = True
@@ -1215,7 +1209,7 @@ def dashboard():
 
     reason_cats_html = ''
     max_c = max(cat_counts) or 1
-    for i, (icon, name, color, _) in enumerate(cat_map):
+    for i, (icon, name, color, bg_light, border_light, _) in enumerate(cat_map):
         c = cat_counts[i]
         pct = round(c / total_reasons * 100)
         bar_w = round(c / max_c * 100)
@@ -1225,12 +1219,10 @@ def dashboard():
         for row in cat_items[i]:
             mgr_count[row['manager']] += 1
         chips_html = ''.join(
-            f'<span style="display:inline-block;background:{color}18;color:{color};'
-            f'border:1px solid {color}44;border-radius:20px;padding:2px 10px;'
-            f'font-size:.72em;font-weight:700;margin:2px 2px 0">'
+            f'<span class="chip" style="background:{bg_light};color:{color};border-color:{border_light}">'
             f'{mgr} ×{cnt}</span>'
             for mgr, cnt in sorted(mgr_count.items(), key=lambda x: -x[1])
-        ) if mgr_count else '<span style="font-size:.72em;color:#ccc">—</span>'
+        ) if mgr_count else '<span style="font-size:11px;color:#ccc">—</span>'
 
         # 展開明細
         detail_html = ''
@@ -1240,43 +1232,35 @@ def dashboard():
             rsn  = row.get('reason', '') or '（未說明）'
             detail_html += (
                 f'<tr>'
-                f'<td style="font-weight:600;color:#555;white-space:nowrap">{row["manager"]}</td>'
-                f'<td style="color:#888;white-space:nowrap">{dt}</td>'
+                f'<td style="white-space:nowrap">{row["manager"]}</td>'
+                f'<td style="white-space:nowrap">{dt}</td>'
                 f'<td>{task}</td>'
-                f'<td style="color:#777;font-size:.85em">{rsn}</td>'
+                f'<td>{rsn}</td>'
                 f'</tr>'
             )
 
         details_block = ''
         if detail_html:
             details_block = f'''
-            <details style="margin-top:10px;text-align:left">
-              <summary style="cursor:pointer;font-size:.75em;color:{color};font-weight:600;
-                             list-style:none;padding:4px 0">▶ 展開明細 ({c} 筆)</summary>
-              <table style="width:100%;border-collapse:collapse;margin-top:8px;font-size:.78em">
-                <thead><tr style="background:{color}18">
-                  <th style="padding:4px 8px;text-align:left">姓名</th>
-                  <th style="padding:4px 8px;text-align:left">日期</th>
-                  <th style="padding:4px 8px;text-align:left">任務</th>
-                  <th style="padding:4px 8px;text-align:left">原因</th>
-                </tr></thead>
+            <details>
+              <summary style="color:{color}">▶ 展開明細（{c} 筆）</summary>
+              <table class="det-table">
                 <tbody>{detail_html}</tbody>
               </table>
             </details>'''
 
         reason_cats_html += f'''
-        <div style="background:#f8f9ff;border-radius:12px;padding:16px;
-                    border-top:3px solid {color}">
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-            <span style="font-size:1.4em">{icon}</span>
-            <span style="font-weight:700;color:#333">{name}</span>
-            <span style="margin-left:auto;font-size:1.4em;font-weight:700;color:{color}">{c}</span>
-            <span style="font-size:.75em;color:#aaa">({pct}%)</span>
+        <div class="cat-card">
+          <div class="cat-top">
+            <div class="cat-icon" style="background:{bg_light}">{icon}</div>
+            <div><div class="cat-label">{name}</div><div class="cat-pct">{pct}%</div></div>
+            <div class="cat-num" style="color:{color}">{c}</div>
           </div>
-          <div style="height:5px;border-radius:99px;background:#eee;margin-bottom:10px">
-            <div style="height:5px;border-radius:99px;background:{color};width:{bar_w}%"></div>
+          <div class="bar-wrap" style="margin-bottom:10px">
+            <div class="bar-fill" style="width:{bar_w}%;background:{color}"></div>
           </div>
           <div>{chips_html}</div>
+          <div class="divider"></div>
           {details_block}
         </div>'''
 
@@ -1292,15 +1276,14 @@ def dashboard():
         bar_color = '#1AAE1A' if rate >= 80 else '#FF9800' if rate >= 60 else '#E53935'
         bar_w = min(int(avg / 5 * 100), 100)
         taskload_html += f'''
-        <div style="background:#f8f9ff;border-radius:10px;padding:14px;text-align:center;
-                    border:1.5px solid #e8eaf6">
-          <div style="font-weight:700;font-size:.9em;margin-bottom:8px">{mgr}</div>
-          <div style="font-size:1.9em;font-weight:700;color:#1A73E8">{avg}</div>
-          <div style="font-size:.72em;color:#888;margin-top:2px">件 / 天</div>
-          <div style="height:6px;background:#eee;border-radius:99px;margin-top:10px">
-            <div style="height:6px;border-radius:99px;background:{bar_color};width:{bar_w}%"></div>
+        <div style="border:1px solid #e8eaed;border-radius:10px;padding:16px;text-align:center;background:#fff">
+          <div style="font-size:12px;color:#9ca3af;font-weight:600;margin-bottom:8px">{mgr}</div>
+          <div style="font-size:1.9em;font-weight:800;color:#2563eb;letter-spacing:-1px">{avg}</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:2px">件 / 天</div>
+          <div style="height:5px;background:#f5f6fa;border-radius:99px;margin-top:10px;overflow:hidden">
+            <div style="height:5px;border-radius:99px;background:{bar_color};width:{bar_w}%"></div>
           </div>
-          <div style="font-size:.72em;color:#888;margin-top:6px">完成率 {rate}%</div>
+          <div style="font-size:11px;color:#9ca3af;margin-top:6px">完成率 {rate}%</div>
         </div>'''
 
     # ── ⑥ 回報率（有回報的天數 / 區間總天數）────────────────
@@ -1324,13 +1307,13 @@ def dashboard():
         else:           label, lc = '⚠️ 常缺報', '#E53935'
         punct_html += f'''
         <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;
-                    background:#f8f9ff;border-radius:10px;margin-bottom:6px">
-          <div style="font-weight:700;width:44px;font-size:.9em">{mgr}</div>
-          <div style="flex:1;height:10px;background:#eee;border-radius:99px;overflow:hidden">
-            <div style="height:10px;border-radius:99px;background:{bar_color};width:{pct}%"></div>
+                    background:#f5f6fa;border-radius:10px;margin-bottom:6px">
+          <div style="font-weight:700;width:44px;font-size:13px;color:#1a1d23">{mgr}</div>
+          <div style="flex:1;height:6px;background:#e8eaed;border-radius:99px;overflow:hidden">
+            <div style="height:6px;border-radius:99px;background:{bar_color};width:{pct}%"></div>
           </div>
-          <div style="width:40px;text-align:right;font-weight:700;font-size:.88em;color:{bar_color}">{pct}%</div>
-          <div style="width:80px;text-align:right;font-size:.72em;color:{lc}">{label}</div>
+          <div style="width:40px;text-align:right;font-weight:700;font-size:13px;color:{bar_color}">{pct}%</div>
+          <div style="width:80px;text-align:right;font-size:11px;color:{lc}">{label}</div>
         </div>'''
 
     # ── 時間軸選擇器 ─────────────────────────────────────────
@@ -1353,130 +1336,250 @@ def dashboard():
   <title>艾薇 回報系統儀表板</title>
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
   <style>
+    :root {{
+      --bg:     #f5f6fa;
+      --white:  #ffffff;
+      --border: #e8eaed;
+      --text:   #1a1d23;
+      --text2:  #4b5563;
+      --gray:   #9ca3af;
+      --accent: #2563eb;
+      --green:  #16a34a;
+      --red:    #dc2626;
+      --orange: #ea580c;
+      --purple: #7c3aed;
+      --shadow: 0 1px 4px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);
+    }}
     *{{box-sizing:border-box;margin:0;padding:0}}
-    body{{font-family:-apple-system,sans-serif;background:#f0f4f8;color:#333}}
-    .header{{background:linear-gradient(135deg,#1A73E8,#5C5CE6);color:#fff;padding:20px 24px 16px;text-align:center}}
-    .header h1{{font-size:1.4em;font-weight:700}}
-    .header p{{font-size:.8em;opacity:.8;margin-top:4px}}
-    .container{{max-width:960px;margin:20px auto;padding:0 14px}}
-    .section-title{{font-size:.95em;font-weight:700;color:#555;margin:22px 0 10px;padding-left:4px}}
-    .card{{background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);overflow:hidden;margin-bottom:8px}}
-    .card-body{{padding:16px 18px}}
-    .grid4{{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px}}
-    .grid2{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
-    table{{width:100%;border-collapse:collapse}}
-    th{{background:#5C5CE6;color:#fff;padding:10px 14px;text-align:left;font-size:.82em}}
-    td{{padding:10px 14px;border-bottom:1px solid #f0f0f0;font-size:.83em;vertical-align:top}}
-    tr:last-child td{{border-bottom:none}}
-    tr:hover td{{background:#f8f9ff}}
-    .empty{{text-align:center;padding:30px;color:#bbb;font-size:.85em}}
-    .time-bar{{background:#fff;border-radius:14px;box-shadow:0 2px 8px rgba(0,0,0,.07);
-               padding:14px 16px;margin-bottom:18px;display:flex;flex-wrap:wrap;align-items:center;gap:8px}}
-    .time-bar-label{{font-size:.8em;font-weight:700;color:#888;margin-right:4px;white-space:nowrap}}
-    .range-btn{{padding:6px 14px;border-radius:99px;border:1.5px solid #d0d6e8;font-size:.82em;
-                font-weight:600;color:#5C5CE6;text-decoration:none;transition:.15s;white-space:nowrap}}
-    .range-btn:hover{{background:#f0f0ff;border-color:#5C5CE6}}
-    .range-btn.active{{background:#5C5CE6;color:#fff;border-color:#5C5CE6}}
-    .divider{{width:1px;height:20px;background:#e0e0e0;margin:0 4px}}
+    body{{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text)}}
+
+    /* ── Header ── */
+    .header{{background:var(--white);border-bottom:1px solid var(--border);
+             padding:0 28px;height:56px;display:flex;align-items:center;gap:16px;
+             position:sticky;top:0;z-index:100}}
+    .logo{{font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.3px}}
+    .logo em{{color:var(--accent);font-style:normal}}
+    .live-badge{{display:flex;align-items:center;gap:5px;background:#f0fdf4;
+                 border:1px solid #bbf7d0;color:var(--green);padding:3px 10px;
+                 border-radius:20px;font-size:11px;font-weight:700}}
+    .live-dot{{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 1.6s infinite}}
+    @keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
+    .header-right{{margin-left:auto;font-size:12px;color:var(--gray)}}
+
+    /* ── Time bar ── */
+    .time-bar{{background:var(--white);border-bottom:1px solid var(--border);
+               padding:0 28px;height:44px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
+    .time-label{{font-size:12px;color:var(--gray);margin-right:6px;font-weight:500}}
+    .range-btn{{padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;
+                cursor:pointer;border:1px solid var(--border);background:transparent;
+                color:var(--text2);text-decoration:none;transition:all .15s;white-space:nowrap}}
+    .range-btn:hover{{background:var(--bg);border-color:#d1d5db}}
+    .range-btn.active{{background:var(--accent);border-color:var(--accent);color:#fff}}
     .custom-form{{display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
-    .custom-form input[type=date]{{padding:5px 10px;border:1.5px solid #d0d6e8;border-radius:8px;
-      font-size:.82em;color:#333;background:#f8f9ff;outline:none;cursor:pointer}}
-    .custom-form input[type=date]:focus{{border-color:#5C5CE6}}
-    .custom-form button{{padding:6px 14px;border-radius:99px;border:none;
-      background:#5C5CE6;color:#fff;font-size:.82em;font-weight:700;cursor:pointer}}
-    .range-tag{{font-size:.78em;color:#888;margin-left:auto;white-space:nowrap}}
-    .rate-grid{{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:8px}}
-    .rate-card{{background:#fff;border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.07)}}
-    .rate-name{{font-weight:700;font-size:.95em;margin-bottom:8px}}
-    .rate-bar-bg{{background:#eee;border-radius:99px;height:8px;margin-bottom:6px}}
-    .rate-bar{{height:8px;border-radius:99px;transition:width .5s}}
-    .rate-pct{{font-size:1.5em;font-weight:700;margin-bottom:2px}}
-    .rate-label{{font-size:.75em;color:#888}}
-    @media(max-width:600px){{.grid2{{grid-template-columns:1fr}}}}
+    .custom-form input[type=date]{{padding:4px 10px;border:1px solid var(--border);border-radius:6px;
+      font-size:12px;color:var(--text);background:var(--bg);outline:none;cursor:pointer}}
+    .custom-form input[type=date]:focus{{border-color:var(--accent)}}
+    .custom-form button{{padding:5px 14px;border-radius:6px;border:none;
+      background:var(--accent);color:#fff;font-size:12px;font-weight:700;cursor:pointer}}
+    .divider-v{{width:1px;height:20px;background:var(--border);margin:0 4px}}
+
+    /* ── Layout ── */
+    .container{{max-width:1080px;margin:0 auto;padding:28px 20px}}
+
+    /* ── Section header ── */
+    .sec-hd{{margin:28px 0 12px}}
+    .sec-title{{font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:3px}}
+    .sec-icon{{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;
+               justify-content:center;font-size:14px;flex-shrink:0}}
+    .sec-desc{{font-size:12px;color:var(--gray);margin-left:36px}}
+
+    /* ── Card ── */
+    .card{{background:var(--white);border:1px solid var(--border);border-radius:12px;
+           box-shadow:var(--shadow);margin-bottom:24px;overflow:hidden}}
+    .card-body{{padding:20px}}
+
+    /* ── 今日快照 ── */
+    .snap-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}
+    .snap-card{{border-radius:10px;padding:16px 14px;border:1.5px solid var(--border);
+                display:flex;align-items:center;gap:12px;transition:box-shadow .15s}}
+    .snap-card:hover{{box-shadow:0 2px 12px rgba(0,0,0,.08)}}
+    .snap-icon-wrap{{width:40px;height:40px;border-radius:10px;display:flex;align-items:center;
+                     justify-content:center;font-size:18px;flex-shrink:0}}
+    .snap-card.done{{border-color:#bbf7d0}}
+    .snap-card.done .snap-icon-wrap{{background:#f0fdf4}}
+    .snap-card.pend{{border-color:#fed7aa}}
+    .snap-card.pend .snap-icon-wrap{{background:#fff7ed}}
+    .snap-card.none{{border-color:var(--border)}}
+    .snap-card.none .snap-icon-wrap{{background:var(--bg)}}
+    .snap-name{{font-size:13px;font-weight:700;color:var(--text)}}
+    .snap-sub{{font-size:11px;color:var(--gray);margin-top:2px}}
+
+    /* ── 完成率 ── */
+    .rate-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:24px}}
+    .rate-card{{border:1px solid var(--border);border-radius:10px;padding:16px;text-align:center;background:var(--white)}}
+    .rate-name{{font-size:12px;color:var(--gray);font-weight:600;margin-bottom:8px}}
+    .rate-num{{font-size:2em;font-weight:800;letter-spacing:-1px;margin-bottom:4px}}
+    .rate-sub{{font-size:11px;color:var(--gray);margin-bottom:10px}}
+    .bar-wrap{{height:5px;background:var(--bg);border-radius:99px;overflow:hidden}}
+    .bar-fill{{height:5px;border-radius:99px}}
+
+    /* ── 原因分類 ── */
+    .cat-grid{{display:grid;grid-template-columns:1fr 1fr;gap:14px}}
+    .cat-card{{border:1px solid var(--border);border-radius:10px;padding:16px;background:var(--white);transition:box-shadow .15s}}
+    .cat-card:hover{{box-shadow:0 2px 12px rgba(0,0,0,.07)}}
+    .cat-top{{display:flex;align-items:center;gap:10px;margin-bottom:12px}}
+    .cat-icon{{width:34px;height:34px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0}}
+    .cat-label{{font-size:13px;font-weight:700;color:var(--text)}}
+    .cat-pct{{font-size:11px;color:var(--gray)}}
+    .cat-num{{margin-left:auto;font-size:1.6em;font-weight:800}}
+    .chip{{display:inline-flex;align-items:center;padding:3px 9px;border-radius:20px;
+           font-size:11px;font-weight:700;margin:2px 2px 6px 0;border:1px solid}}
+    details summary{{font-size:11px;font-weight:600;cursor:pointer;padding:4px 0;
+                     list-style:none;user-select:none}}
+    details summary::-webkit-details-marker{{display:none}}
+    .det-table{{width:100%;border-collapse:collapse;margin-top:8px;font-size:11px}}
+    .det-table td{{padding:5px 6px;border-bottom:1px solid var(--border);color:var(--text2);vertical-align:top}}
+    .det-table td:first-child{{font-weight:600;white-space:nowrap}}
+    .det-table tr:last-child td{{border:none}}
+
+    /* ── Table ── */
+    table{{width:100%;border-collapse:collapse}}
+    th{{background:var(--bg);color:var(--gray);font-size:11px;font-weight:700;
+        text-transform:uppercase;letter-spacing:.5px;padding:10px 16px;
+        text-align:left;border-bottom:1px solid var(--border)}}
+    td{{padding:10px 16px;font-size:13px;border-bottom:1px solid var(--border);color:var(--text2);vertical-align:top}}
+    tr:last-child td{{border:none}}
+    tr:hover td{{background:#fafbff}}
+    .empty{{text-align:center;padding:30px;color:var(--gray);font-size:13px}}
+
+    /* ── 分隔線 ── */
+    .divider{{height:1px;background:var(--border);margin:4px 0 12px}}
+
+    /* ── 兩欄 ── */
+    .two-col{{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-bottom:0}}
+
+    @media(max-width:700px){{
+      .snap-grid,.rate-grid{{grid-template-columns:1fr 1fr}}
+      .cat-grid,.two-col{{grid-template-columns:1fr}}
+    }}
+    @media(max-width:480px){{
+      .snap-grid,.rate-grid{{grid-template-columns:1fr}}
+    }}
   </style>
 </head>
 <body>
+
+  <!-- Header -->
   <div class="header">
-    <h1>📋 艾薇 回報系統儀表板</h1>
-    <p>{since_iso[5:]} ～ {until_iso[5:]}　共 {span_days} 天</p>
+    <div class="logo"><em>艾薇</em> 回報系統儀表板</div>
+    <div class="live-badge"><div class="live-dot"></div> LIVE</div>
+    <div class="header-right">{today.isoformat()}　艾薇通訊科技有限公司</div>
   </div>
+
+  <!-- Time bar -->
+  <div class="time-bar">
+    <span class="time-label">時間範圍</span>
+    {btn('7',  '近 7 天')}
+    {btn('14', '近 14 天')}
+    {btn('30', '近 30 天')}
+    <div class="divider-v"></div>
+    <form class="custom-form" method="get" action="/dashboard">
+      <input type="date" name="from" value="{date_from_str}" max="{today.isoformat()}">
+      <span style="color:var(--gray);font-size:12px">～</span>
+      <input type="date" name="to" value="{date_to_str}" max="{today.isoformat()}">
+      <button type="submit">{'✔ 套用' if active_range == 'custom' else '自訂'}</button>
+    </form>
+    <span style="margin-left:auto;font-size:12px;color:var(--gray)">{since_iso[5:]} ～ {until_iso[5:]}　共 {span_days} 天</span>
+  </div>
+
   <div class="container">
 
-    <!-- 時間軸選擇器 -->
-    <div class="time-bar">
-      <span class="time-bar-label">📅 時間軸</span>
-      {btn('7',  '近 7 天')}
-      {btn('14', '近 14 天')}
-      {btn('30', '近 30 天')}
-      <div class="divider"></div>
-      <form class="custom-form" method="get" action="/dashboard">
-        <input type="date" name="from" value="{date_from_str}" max="{today.isoformat()}">
-        <span style="color:#aaa;font-size:.85em">～</span>
-        <input type="date" name="to" value="{date_to_str}" max="{today.isoformat()}">
-        <button type="submit">{'✔ 套用' if active_range == 'custom' else '自訂'}</button>
-      </form>
-      <span class="range-tag">目前：{current_label}</span>
-    </div>
-
     <!-- ① 今日快照 -->
-    <div class="section-title">🗓 今日快照（{today.isoformat()[5:]}）</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">頁面最頂端一眼看到今天4位主管的回報狀態與完成件數，不用往下滾動</div>
+    <div class="sec-hd" style="margin-top:0">
+      <div class="sec-title"><span class="sec-icon" style="background:#eff6ff">🗓</span>今日快照</div>
+      <div class="sec-desc">即時顯示 4 位主管今日回報狀態與完成件數，不用往下滾動</div>
+    </div>
     <div class="card card-body">
-      <div class="grid4">{snap_cards}</div>
+      <div class="snap-grid">{snap_cards}</div>
     </div>
 
     <!-- 完成率卡片 -->
-    <div class="section-title">📊 完成率（{current_label}）</div>
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#f0fdf4">📊</span>完成率（{current_label}）</div>
+      <div class="sec-desc">區間內晚報完成件數比例，括號為實際件數</div>
+    </div>
     <div class="rate-grid">{rate_cards}</div>
 
     <!-- ③ 完成率趨勢折線圖 -->
-    <div class="section-title">📈 完成率趨勢</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">每人完成率走勢，一眼看出誰在退步、誰在進步，適合月中／月底對焦</div>
-    <div class="card card-body" style="padding-bottom:12px">
-      <canvas id="trendChart" height="200"></canvas>
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#eff6ff">📈</span>完成率趨勢</div>
+      <div class="sec-desc">每人完成率走勢，一眼看出誰在退步、誰在進步，適合月中月底對焦</div>
+    </div>
+    <div class="card card-body">
+      <div style="position:relative;height:160px">
+        <canvas id="trendChart"></canvas>
+      </div>
     </div>
 
     <!-- ② 重複未完成追蹤 -->
-    <div class="section-title">🔁 重複未完成追蹤（近 30 天）</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">同一任務在近30天內出現2次以上未完成即列出，依次數顯示紫／橘／紅，讓你快速找到需要追蹤的人</div>
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#fff7ed">🔁</span>重複未完成追蹤（近 30 天）</div>
+      <div class="sec-desc">同一任務出現 2 次以上未完成即列出，快速找到需要追蹤的人</div>
+    </div>
     <div class="card card-body">{overdue_html}</div>
 
-    <!-- 未完成原因表 + ④ 分類 -->
-    <div class="section-title">❌ 未完成原因統計</div>
+    <!-- 未完成原因表 -->
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#fef2f2">❌</span>未完成原因統計</div>
+      <div class="sec-desc">區間內所有未完成任務的原因明細</div>
+    </div>
     <div class="card">
       <table>
         <thead><tr><th>姓名</th><th>日期</th><th>任務</th><th>未完成原因</th></tr></thead>
         <tbody>{reason_rows}</tbody>
       </table>
     </div>
-    <div class="section-title">🗂 原因分類分析</div>
-    <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">自動歸類未完成原因，顯示各類別的負責人與明細，點「展開明細」可看具體任務與說明</div>
+
+    <!-- ④ 原因分類分析 -->
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#faf5ff">🗂</span>原因分類分析</div>
+      <div class="sec-desc">自動歸類未完成原因，點「展開明細」可看具體任務與說明</div>
+    </div>
     <div class="card card-body">
-      <div class="grid2">{reason_cats_html}</div>
+      <div class="cat-grid">{reason_cats_html}</div>
     </div>
 
     <!-- ⑤ 任務量 + ⑥ 回報率 -->
-    <div class="grid2">
+    <div class="two-col">
       <div>
-        <div class="section-title">📦 平均每日任務量</div>
-        <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">看誰每天計畫太少或太多（完不成），找出任務設定合理性問題</div>
+        <div class="sec-hd">
+          <div class="sec-title"><span class="sec-icon" style="background:#eff6ff">📦</span>平均每日任務量</div>
+          <div class="sec-desc">看誰每天計畫太少或太多（完不成）</div>
+        </div>
         <div class="card card-body">
-          <div class="grid4">{taskload_html}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(100px,1fr));gap:10px">
+            {taskload_html}
+          </div>
         </div>
       </div>
       <div>
-        <div class="section-title">📬 晚報回報率</div>
-        <div style="font-size:.8em;color:#888;margin:-4px 0 10px 4px">統計每人在 23:59 前完成晚間回報的比例，看誰習慣拖到最後一刻才報</div>
+        <div class="sec-hd">
+          <div class="sec-title"><span class="sec-icon" style="background:#f0fdf4">📬</span>晚報回報率</div>
+          <div class="sec-desc">統計每人晚間準時回報的天數比例</div>
+        </div>
         <div class="card card-body">{punct_html}
-          <div style="font-size:.72em;color:#aaa;text-align:center;margin-top:8px">
-            準時定義：23:59 前完成晚間回報
+          <div style="font-size:11px;color:var(--gray);text-align:center;margin-top:8px">
+            統計有回報的天數 / 區間總天數
           </div>
         </div>
       </div>
     </div>
 
     <!-- 每日明細 -->
-    <div class="section-title">📅 每日回報明細</div>
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#eff6ff">📅</span>每日回報明細</div>
+      <div class="sec-desc">以晚報結果為主顯示，🔁 標記代表自動結轉的跨日追蹤任務</div>
+    </div>
     <div class="card">
       <table>
         <thead><tr><th>日期</th><th>姓名</th><th>項目</th><th style="text-align:center">狀態</th></tr></thead>
@@ -1491,11 +1594,11 @@ def dashboard():
     data:{chart_data_js},
     options:{{
       responsive:true,maintainAspectRatio:false,
-      plugins:{{legend:{{position:'top',labels:{{font:{{size:12}},padding:14}}}},
+      plugins:{{legend:{{position:'top',labels:{{font:{{size:12}},padding:14,color:'#4b5563'}}}},
                tooltip:{{callbacks:{{label:c=>` ${{c.dataset.label}}：${{c.raw}}%`}}}}}},
       scales:{{
-        y:{{min:0,max:100,ticks:{{callback:v=>v+'%',font:{{size:11}}}},grid:{{color:'#f0f0f0'}}}},
-        x:{{ticks:{{font:{{size:11}}}},grid:{{display:false}}}}
+        y:{{min:0,max:100,ticks:{{callback:v=>v+'%',font:{{size:11}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
+        x:{{ticks:{{font:{{size:11}},color:'#9ca3af'}},grid:{{display:false}}}}
       }}
     }}
   }});
