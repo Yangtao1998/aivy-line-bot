@@ -1642,13 +1642,65 @@ def sales_dashboard():
     sold  = [r for r in data_rows if r[15].strip() == '已售出']
     stock = [r for r in data_rows if r[15].strip() != '已售出']
 
+    from datetime import datetime as _dt
+
     total_qty    = len(sold)
     total_stock  = len(stock)
     total_rev    = sum(num(r[11]) for r in sold)
     total_profit = sum(num(r[12]) for r in sold)
     margin_pct   = (total_profit / total_rev * 100) if total_rev else 0
     avg_profit   = (total_profit / total_qty) if total_qty else 0
-    max_profit   = max((num(r[12]) for r in sold), default=0)
+
+    # ── 平均在庫天數（已售出：入庫→銷售；庫存中：入庫→今天）────
+    def days_held(r):
+        try:
+            d_in = _dt.strptime(r[1].strip(), '%Y-%m-%d')
+            d_out_str = r[10].strip()
+            d_out = _dt.strptime(d_out_str, '%Y-%m-%d') if d_out_str else _dt.today()
+            return max((d_out - d_in).days, 0)
+        except Exception:
+            return None
+
+    sold_days  = [d for r in sold  if (d := days_held(r)) is not None]
+    stock_days = [d for r in stock if (d := days_held(r)) is not None]
+    avg_days_sold  = (sum(sold_days)  / len(sold_days))  if sold_days  else 0
+    avg_days_stock = (sum(stock_days) / len(stock_days)) if stock_days else 0
+
+    # ── 庫存總成本 ─────────────────────────────────────────────────
+    stock_cost = sum(num(r[7]) for r in stock)
+
+    # ── 品牌平均在庫天數 & 績效表格 ──────────────────────────────
+    b_days   = defaultdict(list)
+    b_profit = defaultdict(float)
+    b_rev    = defaultdict(float)
+    b_qty    = defaultdict(int)
+    for r in sold:
+        b = r[2].strip()
+        d = days_held(r)
+        if d is not None: b_days[b].append(d)
+        b_profit[b] += num(r[12])
+        b_rev[b]    += num(r[11])
+        b_qty[b]    += 1
+
+    brand_day_labels = []
+    brand_day_vals   = []
+    for b, ds in sorted(b_days.items(), key=lambda x: sum(x[1])/len(x[1])):
+        brand_day_labels.append(b)
+        brand_day_vals.append(round(sum(ds)/len(ds), 1))
+
+    brand_perf_rows = ''
+    for b in sorted(b_qty, key=lambda x: b_qty[x], reverse=True):
+        qty  = b_qty[b]
+        avg_d = round(sum(b_days[b])/len(b_days[b]), 1) if b_days[b] else 0
+        mgr  = (b_profit[b]/b_rev[b]*100) if b_rev[b] else 0
+        dc   = '#16a34a' if avg_d <= 7 else '#ea580c' if avg_d <= 14 else '#dc2626'
+        mc   = '#16a34a' if mgr >= 30 else '#ea580c' if mgr >= 20 else '#dc2626'
+        brand_perf_rows += f'''<tr>
+          <td style="font-weight:700">{b}</td>
+          <td style="text-align:right;font-weight:700;color:{dc}">{avg_d:.1f} 天</td>
+          <td style="text-align:right">{qty:,}</td>
+          <td style="text-align:right;font-weight:700;color:{mc}">{mgr:.1f}%</td>
+        </tr>'''
 
     kpi_data = [
         ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
@@ -1657,6 +1709,8 @@ def sales_dashboard():
         ('📈', '總毛利',       f'NT${total_profit:,.0f}',        '#ea580c'),
         ('🎯', '整體毛利率',   f'{margin_pct:.1f}%',             '#dc2626'),
         ('⭐', '平均單台利潤', f'NT${avg_profit:,.0f}',          '#0891b2'),
+        ('⏱', '平均在庫天數', f'{avg_days_sold:.0f} 天',        '#0d9488'),
+        ('💼', '庫存總成本',   f'NT${stock_cost:,.0f}',          '#b45309'),
     ]
     kpi_cards = ''
     for icon, label, disp, color in kpi_data:
@@ -1767,8 +1821,8 @@ def sales_dashboard():
     .card{{background:var(--white);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin-bottom:24px;overflow:hidden}}
     .card-body{{padding:20px}}
     .kpi-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:24px}}
-    @media(min-width:520px){{.kpi-grid{{grid-template-columns:repeat(3,1fr)}}}}
-    @media(min-width:900px){{.kpi-grid{{grid-template-columns:repeat(6,1fr)}}}}
+    @media(min-width:520px){{.kpi-grid{{grid-template-columns:repeat(4,1fr)}}}}
+    @media(min-width:900px){{.kpi-grid{{grid-template-columns:repeat(8,1fr)}}}}
     .kpi-card{{background:var(--white);border:1px solid var(--border);border-radius:12px;
                padding:18px 12px;text-align:center;box-shadow:var(--shadow)}}
     .kpi-icon{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;
@@ -1828,6 +1882,41 @@ def sales_dashboard():
       </div>
     </div>
 
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#f0fdfa">⏱</div>在庫天數分析</div>
+      <div class="sec-desc">平均賣出需要幾天 — 越短代表周轉越快、資金佔用越少</div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-body">
+          <div style="display:flex;gap:24px;margin-bottom:16px">
+            <div style="text-align:center;flex:1;padding:14px;background:#f0fdfa;border-radius:10px">
+              <div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:6px">已售出平均在庫</div>
+              <div style="font-size:2em;font-weight:800;color:#0d9488">{avg_days_sold:.0f} <span style="font-size:.5em;font-weight:500">天</span></div>
+            </div>
+            <div style="text-align:center;flex:1;padding:14px;background:#fff7ed;border-radius:10px">
+              <div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:6px">現有庫存平均等待</div>
+              <div style="font-size:2em;font-weight:800;color:#b45309">{avg_days_stock:.0f} <span style="font-size:.5em;font-weight:500">天</span></div>
+            </div>
+          </div>
+          <div class="chart-wrap"><canvas id="daysChart"></canvas></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr>
+              <th>品牌</th>
+              <th style="text-align:right">平均在庫天</th>
+              <th style="text-align:right">銷售台數</th>
+              <th style="text-align:right">毛利率</th>
+            </tr></thead>
+            <tbody>{brand_perf_rows}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <div class="two-col">
       <div>
         <div class="sec-hd">
@@ -1881,6 +1970,33 @@ def sales_dashboard():
       scales:{{
         y:{{position:'left',ticks:{{callback:v=>'NT$'+v.toLocaleString(),font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
         y2:{{position:'right',min:0,max:50,ticks:{{callback:v=>v+'%',font:{{size:10}},color:'#9ca3af'}},grid:{{drawOnChartArea:false}}}}
+      }}
+    }}
+  }});
+
+  new Chart(document.getElementById('daysChart'),{{
+    type:'bar',
+    data:{{
+      labels:{_json.dumps(brand_day_labels,ensure_ascii=False)},
+      datasets:[{{
+        label:'平均在庫天數',
+        data:{_json.dumps(brand_day_vals)},
+        backgroundColor:{_json.dumps(brand_day_labels)}.map((_,i)=>
+          {_json.dumps(brand_day_vals)}[i]<=7?'#0d948888':
+          {_json.dumps(brand_day_vals)}[i]<=14?'#ea580c88':'#dc262688'
+        ),
+        borderRadius:4
+      }}]
+    }},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{
+        legend:{{display:false}},
+        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.raw}} 天`}}}}
+      }},
+      scales:{{
+        x:{{ticks:{{font:{{size:10}},color:'#4b5563'}},grid:{{display:false}}}},
+        y:{{ticks:{{callback:v=>v+'天',font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}}
       }}
     }}
   }});
