@@ -1618,9 +1618,7 @@ def sales_dashboard():
         '114': '1-QJSBd_3kYyQ7r_-Dw_IRNCOKOW-l5lcqNuWn-1hXwk',
         '113': '1OFvi4vDhLbK2zy5jSm3C43WsW6x_VEbq',
     }
-    year_param = request.args.get('year', '115')
-    if year_param not in YEAR_SHEETS:
-        year_param = '115'
+    year_param = '115'
 
     def _parse_hist(rows, yr):
         """解析 113/114年 按型號分組格式，轉成 115年 16欄標準格式"""
@@ -1784,11 +1782,6 @@ def sales_dashboard():
     month_btns = ''.join(rbtn(m, m) for m in existing_months)
     time_bar_html = f'''
     <div class="time-bar">
-      <span class="time-label">年份</span>
-      {ybtn("115","115年")}
-      {ybtn("114","114年")}
-      {ybtn("113","113年")}
-      <div class="divider-v"></div>
       <span class="time-label">區間</span>
       {rbtn("year","全年度")}
       <div class="divider-v"></div>
