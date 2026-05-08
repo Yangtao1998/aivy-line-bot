@@ -1612,10 +1612,20 @@ def sales_dashboard():
     import csv, io, json as _json
     from collections import defaultdict
 
+    # ── 年份 & 試算表對照 ──────────────────────────────────────────
+    YEAR_SHEETS = {
+        '115': '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg',
+        '114': '1-QJSBd_3kYyQ7r_-Dw_IRNCOKOW-l5lcqNuWn-1hXwk',
+        '113': '1OFvi4vDhLbK2zy5jSm3C43WsW6x_VEbq',
+    }
+    year_param = request.args.get('year', '115')
+    if year_param not in YEAR_SHEETS:
+        year_param = '115'
+
     # ── 讀取主資料庫 CSV（銷售紀錄）────────────────────────────────
     try:
         import requests as _req
-        SHEET_ID = '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg'
+        SHEET_ID = YEAR_SHEETS[year_param]
         CSV_URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv'
         resp = _req.get(CSV_URL, timeout=15)
         resp.encoding = 'utf-8-sig'
@@ -1627,50 +1637,44 @@ def sales_dashboard():
         data_rows = []
         data_ok = False
 
-    # ── 讀取庫存表 CSV（艾薇二手機庫存）────────────────────────────
-    # 欄位：編號(0) 狀態(1) _(2) 型號(3) 容量(4) 顏色(5) 電池(6)
-    #       IMEI(7) 維修(8) 外觀(9) 盒子(10) 版本(11)
-    #       成本價(12) 建議售價(13) _(14) 備註(15) ...
-    try:
-        INV_SHEET_ID = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
-        inv_resp = _req.get(
-            f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv',
-            timeout=15)
-        inv_resp.encoding = 'utf-8-sig'
-        inv_csv = list(csv.reader(io.StringIO(inv_resp.text)))
-        # 跳過標題列，只取有編號的資料列（col 0 以 # 開頭）
-        # 欄位：編號(0) 顏色emoji(1) 狀態(2) 型號(3) 容量(4) 顏色(5)
-        #       電池(6) IMEI(7) _(8) 維修(9) 盒子(10) 版本(11) 成本價(12) 建議售價(13)
-        # 只計算狀態='在庫' 的列（排除已售出未銷帳的 COD 等）
-        inv_rows = [r for r in inv_csv[1:]
-                    if len(r) >= 13
-                    and r[0].strip().startswith('#')
-                    and r[2].strip() == '在庫']
-        inv_ok = True
-    except Exception as _e:
-        logger.error(f'inventory CSV error: {_e}')
-        inv_rows = []
-        inv_ok = False
-
-    # ── 讀取 Android 庫存（中古Android庫存 分頁，gid=1739970295）────
-    # 欄位：品牌(0) emoji(1) 編號(2) 狀態(3) 型號(4) 容量(5) 顏色(6)
-    #       IMEI(7) 維修(8) 外觀(9) 盒子(10) 版本(11) 成本價(12)
-    try:
-        android_resp = _req.get(
-            f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv&gid=1739970295',
-            timeout=15)
-        android_resp.encoding = 'utf-8-sig'
-        android_csv = list(csv.reader(io.StringIO(android_resp.text)))
-        android_rows = [r for r in android_csv[1:]
+    # ── 讀取庫存表（只有115年顯示即時庫存）────────────────────────
+    INV_SHEET_ID = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
+    if year_param == '115':
+        try:
+            inv_resp = _req.get(
+                f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv',
+                timeout=15)
+            inv_resp.encoding = 'utf-8-sig'
+            inv_csv = list(csv.reader(io.StringIO(inv_resp.text)))
+            inv_rows = [r for r in inv_csv[1:]
                         if len(r) >= 13
-                        and r[2].strip().startswith('#')
-                        and r[3].strip() == '在庫'
-                        and r[4].strip()]
-        android_ok = True
-    except Exception as _e:
-        logger.error(f'android CSV error: {_e}')
+                        and r[0].strip().startswith('#')
+                        and r[2].strip() == '在庫']
+            inv_ok = True
+        except Exception as _e:
+            logger.error(f'inventory CSV error: {_e}')
+            inv_rows = []
+            inv_ok = False
+        try:
+            android_resp = _req.get(
+                f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv&gid=1739970295',
+                timeout=15)
+            android_resp.encoding = 'utf-8-sig'
+            android_csv = list(csv.reader(io.StringIO(android_resp.text)))
+            android_rows = [r for r in android_csv[1:]
+                            if len(r) >= 13
+                            and r[2].strip().startswith('#')
+                            and r[3].strip() == '在庫'
+                            and r[4].strip()]
+            android_ok = True
+        except Exception as _e:
+            logger.error(f'android CSV error: {_e}')
+            android_rows = []
+            android_ok = False
+    else:
+        inv_rows = []
         android_rows = []
-        android_ok = False
+        inv_ok = android_ok = False
 
     def num(s):
         try: return float(s.replace(',','').replace('NT$','').replace('$','').replace('%','').strip())
@@ -1699,22 +1703,30 @@ def sales_dashboard():
     else:  # 'year' or default
         sold = sold_all
         range_param = 'year'
-        range_label = '今年度'
+        range_label = f'{year_param}年度'
 
     # 各月份按鈕：只顯示有資料的月份
     existing_months = sorted({r[0].strip() for r in sold_all if r[0].strip() in ALL_MONTHS},
                               key=lambda m: ALL_MONTHS.index(m))
 
+    def ybtn(yr, label):
+        active = 'active' if year_param == yr else ''
+        return f'<a href="/sales-dashboard?year={yr}" class="range-btn {active}">{label}</a>'
+
     def rbtn(rng, label):
         active = 'active' if range_param == rng else ''
-        return f'<a href="/sales-dashboard?range={rng}" class="range-btn {active}">{label}</a>'
+        return f'<a href="/sales-dashboard?year={year_param}&range={rng}" class="range-btn {active}">{label}</a>'
 
     month_btns = ''.join(rbtn(m, m) for m in existing_months)
     time_bar_html = f'''
     <div class="time-bar">
+      <span class="time-label">年份</span>
+      {ybtn("115","115年")}
+      {ybtn("114","114年")}
+      {ybtn("113","113年")}
+      <div class="divider-v"></div>
       <span class="time-label">區間</span>
-      {rbtn("year","今年度")}
-      {rbtn("month",f"本月（{current_mo}）")}
+      {rbtn("year","全年度")}
       <div class="divider-v"></div>
       {month_btns}
     </div>'''
@@ -1920,6 +1932,53 @@ def sales_dashboard():
     iphone_model_rows_html  = build_inv_model_table(inv_rows,     3, 12)
     android_model_rows_html = build_inv_model_table(android_rows, 4, 12)
 
+    if year_param == '115':
+        inv_detail_section = f'''
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📋</div>庫存分類明細</div>
+      <div class="sec-desc">iPhone 與 Android 分開顯示 · 僅計算狀態「在庫」的設備</div>
+    </div>
+    <div class="two-col">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#2563eb;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
+          📱 iPhone 庫存
+          <span style="background:#eff6ff;color:#2563eb;border-radius:6px;padding:2px 10px;font-size:11px">{iphone_inv_qty} 台</span>
+          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">NT${iphone_inv_cost:,.0f}</span>
+        </div>
+        <div class="card"><div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr><th>型號</th><th style="text-align:right">庫存台數</th><th style="text-align:right">成本合計</th></tr></thead>
+            <tbody>{iphone_model_rows_html}</tbody>
+          </table>
+        </div></div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#16a34a;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
+          🤖 Android 庫存
+          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">{android_inv_qty} 台</span>
+          <span style="background:#fff7ed;color:#b45309;border-radius:6px;padding:2px 10px;font-size:11px">NT${android_inv_cost:,.0f}</span>
+        </div>
+        <div class="card"><div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr><th>型號</th><th style="text-align:right">庫存台數</th><th style="text-align:right">成本合計</th></tr></thead>
+            <tbody>{android_model_rows_html}</tbody>
+          </table>
+        </div></div>
+      </div>
+    </div>'''
+    else:
+        inv_detail_section = f'''
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#fef9c3">📦</div>{year_param}年度 年末庫存</div>
+      <div class="sec-desc">年底尚未售出的設備（歷史資料）</div>
+    </div>
+    <div class="card"><div class="card-body" style="padding:0">
+      <table class="mtable">
+        <thead><tr><th>型號</th><th style="text-align:right">未售台數</th><th style="text-align:right">成本合計</th></tr></thead>
+        <tbody>{build_inv_model_table(stock, 3, 7)}</tbody>
+      </table>
+    </div></div>'''
+
     kpi_data = [
         ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
         ('🏪', '庫存總數量',   f'{inv_total_qty:,} 台',           '#7c3aed'),
@@ -2074,7 +2133,7 @@ def sales_dashboard():
 <body>
   <div class="header">
     <div class="logo"><em>艾薇</em>通訊 — 二手機銷售儀表板</div>
-    <div class="live-badge"><div class="live-dot"></div>115 年度</div>
+    <div class="live-badge"><div class="live-dot"></div>{year_param} 年度</div>
     <div class="header-right">資料來源：Google Sheets &nbsp;·&nbsp; 每日 08:00 自動同步</div>
   </div>
   {time_bar_html}
@@ -2088,47 +2147,7 @@ def sales_dashboard():
     </div>
     <div class="kpi-grid">{kpi_cards}</div>
 
-    <!-- 庫存分類明細 -->
-    <div class="sec-hd">
-      <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📋</div>庫存分類明細</div>
-      <div class="sec-desc">iPhone 與 Android 分開顯示 · 僅計算狀態「在庫」的設備</div>
-    </div>
-    <div class="two-col">
-      <div>
-        <div style="font-size:13px;font-weight:700;color:#2563eb;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
-          📱 iPhone 庫存
-          <span style="background:#eff6ff;color:#2563eb;border-radius:6px;padding:2px 10px;font-size:11px">{iphone_inv_qty} 台</span>
-          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">NT${iphone_inv_cost:,.0f}</span>
-        </div>
-        <div class="card"><div class="card-body" style="padding:0">
-          <table class="mtable">
-            <thead><tr>
-              <th>型號</th>
-              <th style="text-align:right">庫存台數</th>
-              <th style="text-align:right">成本合計</th>
-            </tr></thead>
-            <tbody>{iphone_model_rows_html}</tbody>
-          </table>
-        </div></div>
-      </div>
-      <div>
-        <div style="font-size:13px;font-weight:700;color:#16a34a;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
-          🤖 Android 庫存
-          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">{android_inv_qty} 台</span>
-          <span style="background:#fff7ed;color:#b45309;border-radius:6px;padding:2px 10px;font-size:11px">NT${android_inv_cost:,.0f}</span>
-        </div>
-        <div class="card"><div class="card-body" style="padding:0">
-          <table class="mtable">
-            <thead><tr>
-              <th>型號</th>
-              <th style="text-align:right">庫存台數</th>
-              <th style="text-align:right">成本合計</th>
-            </tr></thead>
-            <tbody>{android_model_rows_html}</tbody>
-          </table>
-        </div></div>
-      </div>
-    </div>
+    {inv_detail_section}
 
     <div class="sec-hd">
       <div class="sec-title"><div class="sec-icon" style="background:#f0fdf4">📅</div>各月份銷售趨勢</div>
