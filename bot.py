@@ -1652,6 +1652,26 @@ def sales_dashboard():
         inv_rows = []
         inv_ok = False
 
+    # ── 讀取 Android 庫存（中古Android庫存 分頁，gid=1739970295）────
+    # 欄位：品牌(0) emoji(1) 編號(2) 狀態(3) 型號(4) 容量(5) 顏色(6)
+    #       IMEI(7) 維修(8) 外觀(9) 盒子(10) 版本(11) 成本價(12)
+    try:
+        android_resp = _req.get(
+            f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv&gid=1739970295',
+            timeout=15)
+        android_resp.encoding = 'utf-8-sig'
+        android_csv = list(csv.reader(io.StringIO(android_resp.text)))
+        android_rows = [r for r in android_csv[1:]
+                        if len(r) >= 13
+                        and r[2].strip().startswith('#')
+                        and r[3].strip() == '在庫'
+                        and r[4].strip()]
+        android_ok = True
+    except Exception as _e:
+        logger.error(f'android CSV error: {_e}')
+        android_rows = []
+        android_ok = False
+
     def num(s):
         try: return float(s.replace(',','').replace('NT$','').replace('$','').replace('%','').strip())
         except Exception: return 0.0
@@ -1722,13 +1742,19 @@ def sales_dashboard():
     avg_days_stock = (sum(stock_days) / len(stock_days)) if stock_days else 0
 
     # ── 庫存總成本 ─────────────────────────────────────────────────
-    # 庫存數量 & 成本來自專屬庫存表（更即時準確）
+    # iPhone 庫存（來自 iPhone 分頁）
     if inv_rows:
-        inv_total_qty  = len(inv_rows)
-        inv_total_cost = sum(num(r[12]) for r in inv_rows)
+        iphone_inv_qty  = len(inv_rows)
+        iphone_inv_cost = sum(num(r[12]) for r in inv_rows)
     else:
-        inv_total_qty  = len(stock)
-        inv_total_cost = sum(num(r[7]) for r in stock)
+        iphone_inv_qty  = len([r for r in stock if r[2].strip() == 'Apple'])
+        iphone_inv_cost = sum(num(r[7]) for r in stock if r[2].strip() == 'Apple')
+    # Android 庫存（來自中古Android庫存分頁）
+    android_inv_qty  = len(android_rows)
+    android_inv_cost = sum(num(r[12]) for r in android_rows)
+    # 合計
+    inv_total_qty  = iphone_inv_qty + android_inv_qty
+    inv_total_cost = iphone_inv_cost + android_inv_cost
     stock_cost = inv_total_cost  # 向後相容
 
     # ── 品牌平均在庫天數 & 績效表格 ──────────────────────────────
@@ -1868,6 +1894,31 @@ def sales_dashboard():
     tbl_turnover = rank_table(rows_tr, '型號', '週轉率', '售/庫')
     tbl_stagnant = rank_table(rows_sg, '型號', '滯銷天數', '庫存台數')
     tbl_composite= rank_table(rows_cp, '型號', '綜合分數', '毛利/週轉')
+
+    # ── 庫存分類明細表格 ──────────────────────────────────────────
+    def build_inv_model_table(rows, col_model, col_cost):
+        from collections import defaultdict as _dd
+        mc = _dd(lambda: {'qty': 0, 'cost': 0.0})
+        for r in rows:
+            m = r[col_model].strip()
+            if m:
+                mc[m]['qty'] += 1
+                mc[m]['cost'] += num(r[col_cost])
+        top = sorted(mc.items(), key=lambda x: x[1]['qty'], reverse=True)[:10]
+        if not top:
+            return '<tr><td colspan="3" style="text-align:center;color:#9ca3af;padding:16px">無庫存資料</td></tr>'
+        rows_html = ''
+        for i, (model, s) in enumerate(top):
+            bg = '#f8fafc' if i % 2 == 0 else '#ffffff'
+            rows_html += (f'<tr style="background:{bg}">'
+                          f'<td style="font-size:12px;font-weight:600;padding:7px 12px">{model}</td>'
+                          f'<td style="text-align:right;font-size:12px;padding:7px 12px">{s["qty"]} 台</td>'
+                          f'<td style="text-align:right;font-size:12px;padding:7px 12px">NT${s["cost"]:,.0f}</td>'
+                          f'</tr>')
+        return rows_html
+
+    iphone_model_rows_html  = build_inv_model_table(inv_rows,     3, 12)
+    android_model_rows_html = build_inv_model_table(android_rows, 4, 12)
 
     kpi_data = [
         ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
@@ -2036,6 +2087,48 @@ def sales_dashboard():
       <div class="sec-desc">篩選區間：{range_label} · 已售 {len(sold):,} 台 · 庫存 {len(stock):,} 台</div>
     </div>
     <div class="kpi-grid">{kpi_cards}</div>
+
+    <!-- 庫存分類明細 -->
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📋</div>庫存分類明細</div>
+      <div class="sec-desc">iPhone 與 Android 分開顯示 · 僅計算狀態「在庫」的設備</div>
+    </div>
+    <div class="two-col">
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#2563eb;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
+          📱 iPhone 庫存
+          <span style="background:#eff6ff;color:#2563eb;border-radius:6px;padding:2px 10px;font-size:11px">{iphone_inv_qty} 台</span>
+          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">NT${iphone_inv_cost:,.0f}</span>
+        </div>
+        <div class="card"><div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr>
+              <th>型號</th>
+              <th style="text-align:right">庫存台數</th>
+              <th style="text-align:right">成本合計</th>
+            </tr></thead>
+            <tbody>{iphone_model_rows_html}</tbody>
+          </table>
+        </div></div>
+      </div>
+      <div>
+        <div style="font-size:13px;font-weight:700;color:#16a34a;margin-bottom:8px;padding:0 4px;display:flex;align-items:center;gap:8px">
+          🤖 Android 庫存
+          <span style="background:#f0fdf4;color:#16a34a;border-radius:6px;padding:2px 10px;font-size:11px">{android_inv_qty} 台</span>
+          <span style="background:#fff7ed;color:#b45309;border-radius:6px;padding:2px 10px;font-size:11px">NT${android_inv_cost:,.0f}</span>
+        </div>
+        <div class="card"><div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr>
+              <th>型號</th>
+              <th style="text-align:right">庫存台數</th>
+              <th style="text-align:right">成本合計</th>
+            </tr></thead>
+            <tbody>{android_model_rows_html}</tbody>
+          </table>
+        </div></div>
+      </div>
+    </div>
 
     <div class="sec-hd">
       <div class="sec-title"><div class="sec-icon" style="background:#f0fdf4">📅</div>各月份銷售趨勢</div>
