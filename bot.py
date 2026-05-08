@@ -1612,7 +1612,7 @@ def sales_dashboard():
     import csv, io, json as _json
     from collections import defaultdict
 
-    # ── 讀取主資料庫 CSV ──────────────────────────────────────────
+    # ── 讀取主資料庫 CSV（銷售紀錄）────────────────────────────────
     try:
         import requests as _req
         SHEET_ID = '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg'
@@ -1620,16 +1620,31 @@ def sales_dashboard():
         resp = _req.get(CSV_URL, timeout=15)
         resp.encoding = 'utf-8-sig'
         all_csv = list(csv.reader(io.StringIO(resp.text)))
-        # skip header row, parse data rows
-        data_rows = []
-        for row in all_csv[1:]:
-            if len(row) < 16: continue
-            data_rows.append(row)
+        data_rows = [row for row in all_csv[1:] if len(row) >= 16]
         data_ok = True
     except Exception as _e:
         logger.error(f'sales_dashboard CSV error: {_e}')
         data_rows = []
         data_ok = False
+
+    # ── 讀取庫存表 CSV（艾薇二手機庫存）────────────────────────────
+    # 欄位：編號(0) 狀態(1) _(2) 型號(3) 容量(4) 顏色(5) 電池(6)
+    #       IMEI(7) 維修(8) 外觀(9) 盒子(10) 版本(11)
+    #       成本價(12) 建議售價(13) _(14) 備註(15) ...
+    try:
+        INV_SHEET_ID = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
+        inv_resp = _req.get(
+            f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv',
+            timeout=15)
+        inv_resp.encoding = 'utf-8-sig'
+        inv_csv = list(csv.reader(io.StringIO(inv_resp.text)))
+        # 跳過標題列，只取有編號的資料列（col 0 以 # 開頭）
+        inv_rows = [r for r in inv_csv[1:] if len(r) >= 13 and r[0].strip().startswith('#')]
+        inv_ok = True
+    except Exception as _e:
+        logger.error(f'inventory CSV error: {_e}')
+        inv_rows = []
+        inv_ok = False
 
     def num(s):
         try: return float(s.replace(',','').replace('NT$','').replace('%','').strip())
@@ -1701,7 +1716,14 @@ def sales_dashboard():
     avg_days_stock = (sum(stock_days) / len(stock_days)) if stock_days else 0
 
     # ── 庫存總成本 ─────────────────────────────────────────────────
-    stock_cost = sum(num(r[7]) for r in stock)
+    # 庫存數量 & 成本來自專屬庫存表（更即時準確）
+    if inv_rows:
+        inv_total_qty  = len(inv_rows)
+        inv_total_cost = sum(num(r[12]) for r in inv_rows)
+    else:
+        inv_total_qty  = len(stock)
+        inv_total_cost = sum(num(r[7]) for r in stock)
+    stock_cost = inv_total_cost  # 向後相容
 
     # ── 品牌平均在庫天數 & 績效表格 ──────────────────────────────
     b_days   = defaultdict(list)
@@ -1843,13 +1865,13 @@ def sales_dashboard():
 
     kpi_data = [
         ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
-        ('🏪', '庫存總數量',   f'{total_stock:,} 台',            '#7c3aed'),
+        ('🏪', '庫存總數量',   f'{inv_total_qty:,} 台',           '#7c3aed'),
         ('💰', '總銷售收入',   f'NT${total_rev:,.0f}',           '#16a34a'),
         ('📈', '總毛利',       f'NT${total_profit:,.0f}',        '#ea580c'),
         ('🎯', '整體毛利率',   f'{margin_pct:.1f}%',             '#dc2626'),
         ('⭐', '平均單台利潤', f'NT${avg_profit:,.0f}',          '#0891b2'),
         ('⏱', '平均在庫天數', f'{avg_days_sold:.0f} 天',        '#0d9488'),
-        ('💼', '庫存總成本',   f'NT${stock_cost:,.0f}',          '#b45309'),
+        ('💼', '庫存總成本',   f'NT${inv_total_cost:,.0f}',       '#b45309'),
     ]
     kpi_cards = ''
     for icon, label, disp, color in kpi_data:
