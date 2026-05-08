@@ -1702,9 +1702,114 @@ def sales_dashboard():
           <td style="text-align:right;font-weight:700;color:{mc}">{mgr:.1f}%</td>
         </tr>'''
 
+    # ── 各型號統計（排行榜用）────────────────────────────────────
+    mo_sold   = defaultdict(int)    # 已售台數
+    mo_stock  = defaultdict(int)    # 庫存台數
+    mo_profit = defaultdict(float)  # 已售總利潤
+    mo_rev    = defaultdict(float)  # 已售總售價
+    mo_days   = defaultdict(list)   # 已售在庫天數
+    mo_stock_days = defaultdict(list)  # 庫存等待天數
+
+    for r in sold:
+        m = r[3].strip()
+        mo_sold[m]   += 1
+        mo_profit[m] += num(r[12])
+        mo_rev[m]    += num(r[11])
+        d = days_held(r)
+        if d is not None: mo_days[m].append(d)
+    for r in stock:
+        m = r[3].strip()
+        mo_stock[m] += 1
+        d = days_held(r)
+        if d is not None: mo_stock_days[m].append(d)
+
+    all_models = set(mo_sold) | set(mo_stock)
+
+    def turnover(m):
+        total = mo_sold[m] + mo_stock[m]
+        return (mo_sold[m] / total * 100) if total else 0
+
+    def avg_margin(m):
+        return (mo_profit[m] / mo_rev[m] * 100) if mo_rev[m] else 0
+
+    def stagnant_days(m):
+        ds = mo_stock_days[m]
+        return (sum(ds) / len(ds)) if ds else 0
+
+    # 只取有足夠銷售紀錄的型號（≥3台）用於排行
+    ranked_models = [m for m in all_models if mo_sold[m] >= 3]
+
+    # 毛利率排行（高→低）
+    rank_margin = sorted(ranked_models, key=avg_margin, reverse=True)[:10]
+    # 週轉率排行（高→低）
+    rank_turnover = sorted(ranked_models, key=turnover, reverse=True)[:10]
+    # 滯銷排行（庫存中等待天數最長，只取有庫存的型號）
+    stagnant_models = [m for m in all_models if mo_stock[m] > 0]
+    rank_stagnant = sorted(stagnant_models, key=stagnant_days, reverse=True)[:10]
+
+    # 綜合排名：毛利率(40%) + 週轉率(40%) + 滯銷懲罰(20%)
+    def norm(vals, reverse=False):
+        if not vals: return {}
+        mn, mx = min(vals.values()), max(vals.values())
+        if mx == mn: return {k: 50 for k in vals}
+        return {k: (v-mn)/(mx-mn)*100 if not reverse else (mx-v)/(mx-mn)*100
+                for k,v in vals.items()}
+
+    mg_map  = {m: avg_margin(m)    for m in ranked_models}
+    tr_map  = {m: turnover(m)      for m in ranked_models}
+    sg_map  = {m: stagnant_days(m) for m in ranked_models}
+    mg_norm = norm(mg_map)
+    tr_norm = norm(tr_map)
+    sg_norm = norm(sg_map, reverse=True)
+    composite = {m: mg_norm[m]*0.4 + tr_norm[m]*0.4 + sg_norm[m]*0.2
+                 for m in ranked_models}
+    rank_composite = sorted(ranked_models, key=lambda m: composite[m], reverse=True)[:10]
+
+    def rank_row(i, m, score_str, score_color, extra=''):
+        medal = ['🥇','🥈','🥉'][i] if i < 3 else f'{i+1}'
+        return f'''<tr>
+          <td style="text-align:center;font-size:1.1em">{medal}</td>
+          <td style="font-weight:600;font-size:12px">{m}</td>
+          <td style="text-align:right;font-weight:700;color:{score_color}">{score_str}</td>
+          <td style="text-align:right;font-size:11px;color:#9ca3af">{extra}</td>
+        </tr>'''
+
+    def rank_table(rows_html, h1, h2, h3):
+        return f'''<table class="mtable" style="font-size:12px">
+          <thead><tr>
+            <th style="width:36px;text-align:center">#</th>
+            <th>{h1}</th><th style="text-align:right">{h2}</th>
+            <th style="text-align:right">{h3}</th>
+          </tr></thead><tbody>{rows_html}</tbody></table>'''
+
+    rows_mg = ''.join(rank_row(i, m,
+        f'{avg_margin(m):.1f}%',
+        '#16a34a' if avg_margin(m)>=30 else '#ea580c' if avg_margin(m)>=20 else '#dc2626',
+        f'{mo_sold[m]} 台') for i,m in enumerate(rank_margin))
+
+    rows_tr = ''.join(rank_row(i, m,
+        f'{turnover(m):.0f}%',
+        '#16a34a' if turnover(m)>=80 else '#ea580c' if turnover(m)>=50 else '#dc2626',
+        f'{mo_sold[m]}售/{mo_stock[m]}庫') for i,m in enumerate(rank_turnover))
+
+    rows_sg = ''.join(rank_row(i, m,
+        f'{stagnant_days(m):.0f} 天',
+        '#dc2626' if stagnant_days(m)>30 else '#ea580c' if stagnant_days(m)>14 else '#0d9488',
+        f'{mo_stock[m]} 台') for i,m in enumerate(rank_stagnant))
+
+    rows_cp = ''.join(rank_row(i, m,
+        f'{composite[m]:.0f} 分',
+        '#2563eb',
+        f'毛{avg_margin(m):.0f}%/轉{turnover(m):.0f}%') for i,m in enumerate(rank_composite))
+
+    tbl_margin   = rank_table(rows_mg, '型號', '毛利率', '銷售台數')
+    tbl_turnover = rank_table(rows_tr, '型號', '週轉率', '售/庫')
+    tbl_stagnant = rank_table(rows_sg, '型號', '滯銷天數', '庫存台數')
+    tbl_composite= rank_table(rows_cp, '型號', '綜合分數', '毛利/週轉')
+
     kpi_data = [
         ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
-        ('🏪', '目前庫存',     f'{total_stock:,} 台',            '#7c3aed'),
+        ('🏪', '庫存總數量',   f'{total_stock:,} 台',            '#7c3aed'),
         ('💰', '總銷售收入',   f'NT${total_rev:,.0f}',           '#16a34a'),
         ('📈', '總毛利',       f'NT${total_profit:,.0f}',        '#ea580c'),
         ('🎯', '整體毛利率',   f'{margin_pct:.1f}%',             '#dc2626'),
@@ -1831,6 +1936,9 @@ def sales_dashboard():
     .kpi-val{{font-size:1.3em;font-weight:800;letter-spacing:-.5px;line-height:1}}
     .two-col{{display:grid;grid-template-columns:1fr;gap:16px}}
     @media(min-width:700px){{.two-col{{grid-template-columns:1fr 1fr}}}}
+    .four-col{{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:24px}}
+    @media(min-width:700px){{.four-col{{grid-template-columns:1fr 1fr}}}}
+    @media(min-width:1000px){{.four-col{{grid-template-columns:repeat(4,1fr)}}}}
     .chart-wrap{{position:relative;height:260px}}
     table.mtable{{width:100%;border-collapse:collapse;font-size:13px}}
     table.mtable th{{background:var(--bg);padding:8px 12px;text-align:left;
@@ -1937,6 +2045,30 @@ def sales_dashboard():
             <div class="chart-wrap"><canvas id="topChart"></canvas></div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- 排行榜 -->
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#fef9c3">🏅</div>型號排行榜</div>
+      <div class="sec-desc">僅統計銷售 3 台以上型號 · 綜合分數 = 毛利率 40% + 週轉率 40% + 不滯銷 20%</div>
+    </div>
+    <div class="four-col">
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#16a34a;margin-bottom:8px;padding:0 4px">💰 毛利率排行</div>
+        <div class="card"><div class="card-body" style="padding:0">{tbl_margin}</div></div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#2563eb;margin-bottom:8px;padding:0 4px">🔄 週轉率排行</div>
+        <div class="card"><div class="card-body" style="padding:0">{tbl_turnover}</div></div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:8px;padding:0 4px">🐌 滯銷排行（庫存等待最久）</div>
+        <div class="card"><div class="card-body" style="padding:0">{tbl_stagnant}</div></div>
+      </div>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:8px;padding:0 4px">⭐ 綜合排名</div>
+        <div class="card"><div class="card-body" style="padding:0">{tbl_composite}</div></div>
       </div>
     </div>
 
