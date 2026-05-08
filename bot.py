@@ -1607,6 +1607,323 @@ def dashboard():
 </html>'''
     return html
 
+@app.route('/sales-dashboard', methods=['GET'])
+def sales_dashboard():
+    import csv, io, json as _json
+    try:
+        import requests as _req
+        SHEET_ID = '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg'
+        CSV_URL = (f'https://docs.google.com/spreadsheets/d/{SHEET_ID}'
+                   '/export?format=csv&sheet=%E6%91%98%E8%A6%81%E7%B5%B1%E8%A8%88')
+        resp = _req.get(CSV_URL, timeout=10)
+        resp.encoding = 'utf-8-sig'
+        csv_rows = list(csv.reader(io.StringIO(resp.text)))
+        data_ok = True
+    except Exception as _e:
+        logger.error(f'sales_dashboard CSV error: {_e}')
+        csv_rows = []
+        data_ok = False
+
+    def sg(r, c, default=''):
+        try:
+            v = csv_rows[r][c].strip()
+            return v if v else default
+        except Exception:
+            return default
+
+    def fmt_kpi(val, fmt):
+        try:
+            v = float(val.replace('NT$','').replace(',','').replace('%','').strip())
+            if fmt == 'money':
+                return f'NT${v:,.0f}'
+            if fmt == 'pct':
+                if v < 1: v *= 100
+                return f'{v:.1f}%'
+            return f'{int(v):,}'
+        except Exception:
+            return val or '—'
+
+    # ── KPIs (1-indexed rows 4-9 → 0-indexed 3-8, col B → 0-indexed 1) ──
+    kpi_data = [
+        ('📦', '總銷售台數',   sg(3,1), 'int',   '#2563eb'),
+        ('🏪', '目前庫存',     sg(4,1), 'int',   '#7c3aed'),
+        ('💰', '總銷售收入',   sg(5,1), 'money', '#16a34a'),
+        ('📈', '總毛利',       sg(6,1), 'money', '#ea580c'),
+        ('🎯', '整體毛利率',   sg(7,1), 'pct',   '#dc2626'),
+        ('⭐', '平均單台利潤', sg(8,1), 'money', '#0891b2'),
+    ]
+    kpi_cards = ''
+    for icon, label, val, fmt, color in kpi_data:
+        disp = fmt_kpi(val, fmt)
+        kpi_cards += f'''
+        <div class="kpi-card">
+          <div class="kpi-icon" style="background:{color}22">{icon}</div>
+          <div class="kpi-label">{label}</div>
+          <div class="kpi-val" style="color:{color}">{disp}</div>
+        </div>'''
+
+    # ── Monthly (1-indexed rows 5-10 → 0-indexed 4-9, cols D-H → 3-7) ──
+    month_labels, month_qty, month_rev, month_profit, month_margin = [], [], [], [], []
+    month_rows_html = ''
+    for ri in range(4, 10):
+        m = sg(ri, 3)
+        if not m or m in ('月份',): continue
+        try: qty = int(float(sg(ri,4,'0')))
+        except Exception: qty = 0
+        try: rev = int(float(sg(ri,5,'0').replace(',','')))
+        except Exception: rev = 0
+        try: prf = int(float(sg(ri,6,'0').replace(',','')))
+        except Exception: prf = 0
+        try:
+            mg = float(sg(ri,7,'0').replace('%','').replace(',',''))
+            if mg < 1: mg *= 100
+        except Exception: mg = 0.0
+
+        if m != '合計':
+            month_labels.append(m)
+            month_qty.append(qty)
+            month_rev.append(rev)
+            month_profit.append(prf)
+            month_margin.append(round(mg, 1))
+
+        mc = '#16a34a' if mg >= 30 else '#ea580c' if mg >= 20 else '#dc2626'
+        row_style = ' style="background:#f0fdf4;font-weight:700"' if m == '合計' else ''
+        month_rows_html += f'''<tr{row_style}>
+          <td style="font-weight:700">{m}</td>
+          <td style="text-align:right">{qty:,}</td>
+          <td style="text-align:right">NT${rev:,}</td>
+          <td style="text-align:right">NT${prf:,}</td>
+          <td style="text-align:right;font-weight:700;color:{mc}">{mg:.1f}%</td>
+        </tr>'''
+
+    # ── Brand (1-indexed rows 14-22 → 0-indexed 13-21, cols A-B → 0-1) ──
+    brand_labels, brand_vals = [], []
+    for ri in range(13, 22):
+        b = sg(ri, 0)
+        c = sg(ri, 1, '0')
+        if not b or b in ('品牌','品牌銷售佔比'): continue
+        try:
+            cv = int(float(c))
+            if cv > 0:
+                brand_labels.append(b)
+                brand_vals.append(cv)
+        except Exception:
+            pass
+
+    brand_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
+                    '#0891b2','#ca8a04','#db2777','#64748b']
+
+    # ── Top 10 (1-indexed rows 14-23 → 0-indexed 13-22, cols E-F → 4-5) ──
+    top10_labels, top10_vals = [], []
+    for ri in range(13, 23):
+        model = sg(ri, 4)
+        cnt   = sg(ri, 5, '0')
+        if not model or model in ('型號',): continue
+        try:
+            top10_labels.append(model)
+            top10_vals.append(int(float(cnt)))
+        except Exception:
+            pass
+
+    top10_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
+                    '#0891b2','#ca8a04','#db2777','#64748b','#475569']
+
+    html = f'''<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>艾薇通訊 — 二手機銷售儀表板</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <style>
+    :root {{
+      --bg:#f5f6fa;--white:#fff;--border:#e8eaed;--text:#1a1d23;
+      --text2:#4b5563;--gray:#9ca3af;--accent:#2563eb;
+      --green:#16a34a;--red:#dc2626;--orange:#ea580c;
+      --shadow:0 1px 4px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);
+    }}
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text)}}
+    .header{{background:var(--white);border-bottom:1px solid var(--border);
+             padding:0 28px;height:56px;display:flex;align-items:center;gap:16px;
+             position:sticky;top:0;z-index:100}}
+    .logo{{font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.3px}}
+    .logo em{{color:var(--accent);font-style:normal}}
+    .live-badge{{display:flex;align-items:center;gap:5px;background:#f0fdf4;
+                 border:1px solid #bbf7d0;color:var(--green);padding:3px 10px;
+                 border-radius:20px;font-size:11px;font-weight:700}}
+    .live-dot{{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 1.6s infinite}}
+    @keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
+    .header-right{{margin-left:auto;font-size:12px;color:var(--gray)}}
+    .container{{max-width:1080px;margin:0 auto;padding:28px 20px}}
+    .sec-hd{{margin:28px 0 12px}}
+    .sec-title{{font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:3px}}
+    .sec-icon{{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}}
+    .sec-desc{{font-size:12px;color:var(--gray);margin-left:36px}}
+    .card{{background:var(--white);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin-bottom:24px;overflow:hidden}}
+    .card-body{{padding:20px}}
+    .kpi-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:24px}}
+    @media(min-width:520px){{.kpi-grid{{grid-template-columns:repeat(3,1fr)}}}}
+    @media(min-width:900px){{.kpi-grid{{grid-template-columns:repeat(6,1fr)}}}}
+    .kpi-card{{background:var(--white);border:1px solid var(--border);border-radius:12px;
+               padding:18px 12px;text-align:center;box-shadow:var(--shadow)}}
+    .kpi-icon{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;
+               justify-content:center;font-size:17px;margin:0 auto 10px}}
+    .kpi-label{{font-size:11px;color:var(--gray);font-weight:600;margin-bottom:6px}}
+    .kpi-val{{font-size:1.3em;font-weight:800;letter-spacing:-.5px;line-height:1}}
+    .two-col{{display:grid;grid-template-columns:1fr;gap:16px}}
+    @media(min-width:700px){{.two-col{{grid-template-columns:1fr 1fr}}}}
+    .chart-wrap{{position:relative;height:260px}}
+    table.mtable{{width:100%;border-collapse:collapse;font-size:13px}}
+    table.mtable th{{background:var(--bg);padding:8px 12px;text-align:left;
+                     font-weight:700;font-size:12px;color:var(--text2);border-bottom:2px solid var(--border)}}
+    table.mtable td{{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}}
+    table.mtable tr:last-child td{{border-bottom:none}}
+    .error-banner{{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;
+                   padding:14px 20px;border-radius:10px;margin-bottom:20px;font-size:13px}}
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo"><em>艾薇</em>通訊 — 二手機銷售儀表板</div>
+    <div class="live-badge"><div class="live-dot"></div>115 年度</div>
+    <div class="header-right">資料來源：Google Sheets &nbsp;·&nbsp; 每日 08:00 自動同步</div>
+  </div>
+
+  <div class="container">
+    {'<div class="error-banner">⚠️ 無法載入試算表資料，請確認試算表已設定為「知道連結的人均可查看」。</div>' if not data_ok else ''}
+
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📊</div>整體績效指標</div>
+      <div class="sec-desc">115 年度累計（1 月 — 5 月）</div>
+    </div>
+    <div class="kpi-grid">{kpi_cards}</div>
+
+    <div class="sec-hd">
+      <div class="sec-title"><div class="sec-icon" style="background:#f0fdf4">📅</div>各月份銷售趨勢</div>
+    </div>
+    <div class="two-col">
+      <div class="card">
+        <div class="card-body">
+          <div class="chart-wrap"><canvas id="monthChart"></canvas></div>
+        </div>
+      </div>
+      <div class="card">
+        <div class="card-body" style="padding:0">
+          <table class="mtable">
+            <thead><tr>
+              <th>月份</th>
+              <th style="text-align:right">台數</th>
+              <th style="text-align:right">銷售額</th>
+              <th style="text-align:right">毛利</th>
+              <th style="text-align:right">毛利率</th>
+            </tr></thead>
+            <tbody>{month_rows_html}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div class="two-col">
+      <div>
+        <div class="sec-hd">
+          <div class="sec-title"><div class="sec-icon" style="background:#faf5ff">🏷</div>品牌銷售佔比</div>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div class="chart-wrap"><canvas id="brandChart"></canvas></div>
+          </div>
+        </div>
+      </div>
+      <div>
+        <div class="sec-hd">
+          <div class="sec-title"><div class="sec-icon" style="background:#fff7ed">🏆</div>Top 10 熱銷型號</div>
+        </div>
+        <div class="card">
+          <div class="card-body">
+            <div class="chart-wrap"><canvas id="topChart"></canvas></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+  new Chart(document.getElementById('monthChart'),{{
+    type:'bar',
+    data:{{
+      labels:{_json.dumps(month_labels,ensure_ascii=False)},
+      datasets:[
+        {{type:'bar',label:'銷售額',data:{_json.dumps(month_rev)},
+          backgroundColor:'#2563eb33',borderColor:'#2563eb',borderWidth:1.5,yAxisID:'y'}},
+        {{type:'bar',label:'毛利',data:{_json.dumps(month_profit)},
+          backgroundColor:'#16a34a33',borderColor:'#16a34a',borderWidth:1.5,yAxisID:'y'}},
+        {{type:'line',label:'毛利率%',data:{_json.dumps(month_margin)},
+          borderColor:'#ea580c',backgroundColor:'#ea580c22',
+          tension:.4,pointRadius:4,fill:false,yAxisID:'y2'}}
+      ]
+    }},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{
+        legend:{{position:'top',labels:{{font:{{size:11}},padding:12,color:'#4b5563'}}}},
+        tooltip:{{callbacks:{{
+          label:ctx=>ctx.dataset.yAxisID==='y2'
+            ?` ${{ctx.dataset.label}}: ${{ctx.raw}}%`
+            :` ${{ctx.dataset.label}}: NT$${{ctx.raw.toLocaleString()}}`
+        }}}}
+      }},
+      scales:{{
+        y:{{position:'left',ticks:{{callback:v=>'NT$'+v.toLocaleString(),font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
+        y2:{{position:'right',min:0,max:50,ticks:{{callback:v=>v+'%',font:{{size:10}},color:'#9ca3af'}},grid:{{drawOnChartArea:false}}}}
+      }}
+    }}
+  }});
+
+  new Chart(document.getElementById('brandChart'),{{
+    type:'doughnut',
+    data:{{
+      labels:{_json.dumps(brand_labels,ensure_ascii=False)},
+      datasets:[{{data:{_json.dumps(brand_vals)},
+        backgroundColor:{_json.dumps(brand_colors[:len(brand_labels)])},borderWidth:2}}]
+    }},
+    options:{{
+      responsive:true,maintainAspectRatio:false,
+      plugins:{{
+        legend:{{position:'right',labels:{{font:{{size:11}},padding:10,color:'#4b5563'}}}},
+        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.label}}: ${{ctx.raw}} 台`}}}}
+      }}
+    }}
+  }});
+
+  new Chart(document.getElementById('topChart'),{{
+    type:'bar',
+    data:{{
+      labels:{_json.dumps(top10_labels,ensure_ascii=False)},
+      datasets:[{{
+        label:'銷售台數',data:{_json.dumps(top10_vals)},
+        backgroundColor:{_json.dumps([c+'cc' for c in top10_colors[:len(top10_vals)]])},
+        borderRadius:4
+      }}]
+    }},
+    options:{{
+      indexAxis:'y',responsive:true,maintainAspectRatio:false,
+      plugins:{{
+        legend:{{display:false}},
+        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.raw}} 台`}}}}
+      }},
+      scales:{{
+        x:{{ticks:{{font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
+        y:{{ticks:{{font:{{size:10}},color:'#4b5563'}}}}
+      }}
+    }}
+  }});
+  </script>
+</body>
+</html>'''
+    return html
+
 @app.route('/webhook', methods=['POST'])
 def webhook():
     signature = request.headers.get('X-Line-Signature', '')
