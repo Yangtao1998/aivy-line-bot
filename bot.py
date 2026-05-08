@@ -1610,51 +1610,56 @@ def dashboard():
 @app.route('/sales-dashboard', methods=['GET'])
 def sales_dashboard():
     import csv, io, json as _json
+    from collections import defaultdict
+
+    # ── 讀取主資料庫 CSV ──────────────────────────────────────────
     try:
         import requests as _req
         SHEET_ID = '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg'
-        CSV_URL = (f'https://docs.google.com/spreadsheets/d/{SHEET_ID}'
-                   '/export?format=csv&sheet=%E6%91%98%E8%A6%81%E7%B5%B1%E8%A8%88')
-        resp = _req.get(CSV_URL, timeout=10)
+        CSV_URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv'
+        resp = _req.get(CSV_URL, timeout=15)
         resp.encoding = 'utf-8-sig'
-        csv_rows = list(csv.reader(io.StringIO(resp.text)))
+        all_csv = list(csv.reader(io.StringIO(resp.text)))
+        # skip header row, parse data rows
+        data_rows = []
+        for row in all_csv[1:]:
+            if len(row) < 16: continue
+            data_rows.append(row)
         data_ok = True
     except Exception as _e:
         logger.error(f'sales_dashboard CSV error: {_e}')
-        csv_rows = []
+        data_rows = []
         data_ok = False
 
-    def sg(r, c, default=''):
-        try:
-            v = csv_rows[r][c].strip()
-            return v if v else default
-        except Exception:
-            return default
+    def num(s):
+        try: return float(s.replace(',','').replace('NT$','').replace('%','').strip())
+        except Exception: return 0.0
 
-    def fmt_kpi(val, fmt):
-        try:
-            v = float(val.replace('NT$','').replace(',','').replace('%','').strip())
-            if fmt == 'money':
-                return f'NT${v:,.0f}'
-            if fmt == 'pct':
-                if v < 1: v *= 100
-                return f'{v:.1f}%'
-            return f'{int(v):,}'
-        except Exception:
-            return val or '—'
+    # ── 計算 KPI ──────────────────────────────────────────────────
+    # columns: 月份(0) 入庫日期(1) 品牌(2) 型號(3) 編號(4) 容量(5) 顏色(6)
+    #          收購(7) IMEI(8) 備註(9) 銷售日(10) 售價(11) 利潤(12)
+    #          毛利率%(13) 客戶備註(14) 狀態(15)
+    sold  = [r for r in data_rows if r[15].strip() == '已售出']
+    stock = [r for r in data_rows if r[15].strip() != '已售出']
 
-    # ── KPIs (1-indexed rows 4-9 → 0-indexed 3-8, col B → 0-indexed 1) ──
+    total_qty    = len(sold)
+    total_stock  = len(stock)
+    total_rev    = sum(num(r[11]) for r in sold)
+    total_profit = sum(num(r[12]) for r in sold)
+    margin_pct   = (total_profit / total_rev * 100) if total_rev else 0
+    avg_profit   = (total_profit / total_qty) if total_qty else 0
+    max_profit   = max((num(r[12]) for r in sold), default=0)
+
     kpi_data = [
-        ('📦', '總銷售台數',   sg(3,1), 'int',   '#2563eb'),
-        ('🏪', '目前庫存',     sg(4,1), 'int',   '#7c3aed'),
-        ('💰', '總銷售收入',   sg(5,1), 'money', '#16a34a'),
-        ('📈', '總毛利',       sg(6,1), 'money', '#ea580c'),
-        ('🎯', '整體毛利率',   sg(7,1), 'pct',   '#dc2626'),
-        ('⭐', '平均單台利潤', sg(8,1), 'money', '#0891b2'),
+        ('📦', '總銷售台數',   f'{total_qty:,} 台',              '#2563eb'),
+        ('🏪', '目前庫存',     f'{total_stock:,} 台',            '#7c3aed'),
+        ('💰', '總銷售收入',   f'NT${total_rev:,.0f}',           '#16a34a'),
+        ('📈', '總毛利',       f'NT${total_profit:,.0f}',        '#ea580c'),
+        ('🎯', '整體毛利率',   f'{margin_pct:.1f}%',             '#dc2626'),
+        ('⭐', '平均單台利潤', f'NT${avg_profit:,.0f}',          '#0891b2'),
     ]
     kpi_cards = ''
-    for icon, label, val, fmt, color in kpi_data:
-        disp = fmt_kpi(val, fmt)
+    for icon, label, disp, color in kpi_data:
         kpi_cards += f'''
         <div class="kpi-card">
           <div class="kpi-icon" style="background:{color}22">{icon}</div>
@@ -1662,69 +1667,68 @@ def sales_dashboard():
           <div class="kpi-val" style="color:{color}">{disp}</div>
         </div>'''
 
-    # ── Monthly (1-indexed rows 5-10 → 0-indexed 4-9, cols D-H → 3-7) ──
+    # ── 月份統計 ──────────────────────────────────────────────────
+    MONTH_ORDER = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+    m_qty    = defaultdict(int)
+    m_rev    = defaultdict(float)
+    m_profit = defaultdict(float)
+    for r in sold:
+        mo = r[0].strip()
+        m_qty[mo]    += 1
+        m_rev[mo]    += num(r[11])
+        m_profit[mo] += num(r[12])
+
     month_labels, month_qty, month_rev, month_profit, month_margin = [], [], [], [], []
     month_rows_html = ''
-    for ri in range(4, 10):
-        m = sg(ri, 3)
-        if not m or m in ('月份',): continue
-        try: qty = int(float(sg(ri,4,'0')))
-        except Exception: qty = 0
-        try: rev = int(float(sg(ri,5,'0').replace(',','')))
-        except Exception: rev = 0
-        try: prf = int(float(sg(ri,6,'0').replace(',','')))
-        except Exception: prf = 0
-        try:
-            mg = float(sg(ri,7,'0').replace('%','').replace(',',''))
-            if mg < 1: mg *= 100
-        except Exception: mg = 0.0
-
-        if m != '合計':
-            month_labels.append(m)
-            month_qty.append(qty)
-            month_rev.append(rev)
-            month_profit.append(prf)
-            month_margin.append(round(mg, 1))
-
+    for mo in MONTH_ORDER:
+        if mo not in m_qty: continue
+        qty = m_qty[mo]
+        rev = m_rev[mo]
+        prf = m_profit[mo]
+        mg  = (prf / rev * 100) if rev else 0
+        month_labels.append(mo)
+        month_qty.append(qty)
+        month_rev.append(int(rev))
+        month_profit.append(int(prf))
+        month_margin.append(round(mg, 1))
         mc = '#16a34a' if mg >= 30 else '#ea580c' if mg >= 20 else '#dc2626'
-        row_style = ' style="background:#f0fdf4;font-weight:700"' if m == '合計' else ''
-        month_rows_html += f'''<tr{row_style}>
-          <td style="font-weight:700">{m}</td>
+        month_rows_html += f'''<tr>
+          <td style="font-weight:700">{mo}</td>
           <td style="text-align:right">{qty:,}</td>
-          <td style="text-align:right">NT${rev:,}</td>
-          <td style="text-align:right">NT${prf:,}</td>
+          <td style="text-align:right">NT${int(rev):,}</td>
+          <td style="text-align:right">NT${int(prf):,}</td>
           <td style="text-align:right;font-weight:700;color:{mc}">{mg:.1f}%</td>
         </tr>'''
+    # 合計列
+    if month_labels:
+        tr = int(total_rev); tp = int(total_profit)
+        tmc = '#16a34a' if margin_pct >= 30 else '#ea580c' if margin_pct >= 20 else '#dc2626'
+        month_rows_html += f'''<tr style="background:#f0fdf4;font-weight:700">
+          <td>合計</td>
+          <td style="text-align:right">{total_qty:,}</td>
+          <td style="text-align:right">NT${tr:,}</td>
+          <td style="text-align:right">NT${tp:,}</td>
+          <td style="text-align:right;font-weight:700;color:{tmc}">{margin_pct:.1f}%</td>
+        </tr>'''
 
-    # ── Brand (1-indexed rows 14-22 → 0-indexed 13-21, cols A-B → 0-1) ──
-    brand_labels, brand_vals = [], []
-    for ri in range(13, 22):
-        b = sg(ri, 0)
-        c = sg(ri, 1, '0')
-        if not b or b in ('品牌','品牌銷售佔比'): continue
-        try:
-            cv = int(float(c))
-            if cv > 0:
-                brand_labels.append(b)
-                brand_vals.append(cv)
-        except Exception:
-            pass
-
+    # ── 品牌統計 ──────────────────────────────────────────────────
+    b_cnt = defaultdict(int)
+    for r in sold:
+        b_cnt[r[2].strip()] += 1
+    brand_sorted = sorted(b_cnt.items(), key=lambda x: x[1], reverse=True)
+    brand_labels = [b for b, _ in brand_sorted]
+    brand_vals   = [c for _, c in brand_sorted]
     brand_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
-                    '#0891b2','#ca8a04','#db2777','#64748b']
+                    '#0891b2','#ca8a04','#db2777','#64748b','#475569',
+                    '#0d9488','#b45309']
 
-    # ── Top 10 (1-indexed rows 14-23 → 0-indexed 13-22, cols E-F → 4-5) ──
-    top10_labels, top10_vals = [], []
-    for ri in range(13, 23):
-        model = sg(ri, 4)
-        cnt   = sg(ri, 5, '0')
-        if not model or model in ('型號',): continue
-        try:
-            top10_labels.append(model)
-            top10_vals.append(int(float(cnt)))
-        except Exception:
-            pass
-
+    # ── Top 10 型號 ───────────────────────────────────────────────
+    mo_cnt = defaultdict(int)
+    for r in sold:
+        mo_cnt[r[3].strip()] += 1
+    top10 = sorted(mo_cnt.items(), key=lambda x: x[1], reverse=True)[:10]
+    top10_labels = [m for m, _ in top10]
+    top10_vals   = [c for _, c in top10]
     top10_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
                     '#0891b2','#ca8a04','#db2777','#64748b','#475569']
 
