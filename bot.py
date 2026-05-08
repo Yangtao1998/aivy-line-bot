@@ -1635,14 +1635,48 @@ def sales_dashboard():
         try: return float(s.replace(',','').replace('NT$','').replace('%','').strip())
         except Exception: return 0.0
 
-    # ── 計算 KPI ──────────────────────────────────────────────────
+    from datetime import datetime as _dt, date as _date
+
+    # ── 日期區間篩選 ───────────────────────────────────────────────
     # columns: 月份(0) 入庫日期(1) 品牌(2) 型號(3) 編號(4) 容量(5) 顏色(6)
     #          收購(7) IMEI(8) 備註(9) 銷售日(10) 售價(11) 利潤(12)
     #          毛利率%(13) 客戶備註(14) 狀態(15)
-    sold  = [r for r in data_rows if r[15].strip() == '已售出']
-    stock = [r for r in data_rows if r[15].strip() != '已售出']
+    ALL_MONTHS = ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月']
+    today_d      = _date.today()
+    current_mo   = f'{today_d.month}月'
+    range_param  = request.args.get('range', 'year')
 
-    from datetime import datetime as _dt
+    sold_all  = [r for r in data_rows if r[15].strip() == '已售出']
+    stock     = [r for r in data_rows if r[15].strip() != '已售出']
+
+    if range_param == 'month':
+        sold = [r for r in sold_all if r[0].strip() == current_mo]
+        range_label = f'本月（{current_mo}）'
+    elif range_param in ALL_MONTHS:
+        sold = [r for r in sold_all if r[0].strip() == range_param]
+        range_label = range_param
+    else:  # 'year' or default
+        sold = sold_all
+        range_param = 'year'
+        range_label = '今年度'
+
+    # 各月份按鈕：只顯示有資料的月份
+    existing_months = sorted({r[0].strip() for r in sold_all if r[0].strip() in ALL_MONTHS},
+                              key=lambda m: ALL_MONTHS.index(m))
+
+    def rbtn(rng, label):
+        active = 'active' if range_param == rng else ''
+        return f'<a href="/sales-dashboard?range={rng}" class="range-btn {active}">{label}</a>'
+
+    month_btns = ''.join(rbtn(m, m) for m in existing_months)
+    time_bar_html = f'''
+    <div class="time-bar">
+      <span class="time-label">區間</span>
+      {rbtn("year","今年度")}
+      {rbtn("month",f"本月（{current_mo}）")}
+      <div class="divider-v"></div>
+      {month_btns}
+    </div>'''
 
     total_qty    = len(sold)
     total_stock  = len(stock)
@@ -1945,6 +1979,15 @@ def sales_dashboard():
                      font-weight:700;font-size:12px;color:var(--text2);border-bottom:2px solid var(--border)}}
     table.mtable td{{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}}
     table.mtable tr:last-child td{{border-bottom:none}}
+    .time-bar{{background:var(--white);border-bottom:1px solid var(--border);
+               padding:0 28px;height:44px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
+    .time-label{{font-size:12px;color:var(--gray);margin-right:6px;font-weight:500}}
+    .range-btn{{padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;
+                cursor:pointer;border:1px solid var(--border);background:transparent;
+                color:var(--text2);text-decoration:none;transition:all .15s;white-space:nowrap}}
+    .range-btn:hover{{background:var(--bg);border-color:#d1d5db}}
+    .range-btn.active{{background:var(--accent);border-color:var(--accent);color:#fff}}
+    .divider-v{{width:1px;height:20px;background:var(--border);margin:0 4px}}
     .error-banner{{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;
                    padding:14px 20px;border-radius:10px;margin-bottom:20px;font-size:13px}}
   </style>
@@ -1955,13 +1998,14 @@ def sales_dashboard():
     <div class="live-badge"><div class="live-dot"></div>115 年度</div>
     <div class="header-right">資料來源：Google Sheets &nbsp;·&nbsp; 每日 08:00 自動同步</div>
   </div>
+  {time_bar_html}
 
   <div class="container">
     {'<div class="error-banner">⚠️ 無法載入試算表資料，請確認試算表已設定為「知道連結的人均可查看」。</div>' if not data_ok else ''}
 
     <div class="sec-hd">
       <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📊</div>整體績效指標</div>
-      <div class="sec-desc">115 年度累計（1 月 — 5 月）</div>
+      <div class="sec-desc">篩選區間：{range_label} · 已售 {len(sold):,} 台 · 庫存 {len(stock):,} 台</div>
     </div>
     <div class="kpi-grid">{kpi_cards}</div>
 
