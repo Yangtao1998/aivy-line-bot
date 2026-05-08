@@ -1622,6 +1622,67 @@ def sales_dashboard():
     if year_param not in YEAR_SHEETS:
         year_param = '115'
 
+    def _parse_hist(rows, yr):
+        """解析 113/114年 按型號分組格式，轉成 115年 16欄標準格式"""
+        from datetime import datetime as _dth
+        ad_year = int(yr) + 1911
+        def _pd(d):
+            d = d.strip()
+            if not d: return None
+            for fmt in ('%Y-%m-%d', '%Y/%m/%d'):
+                try: return _dth.strptime(d, fmt)
+                except: pass
+            p = d.split('/')
+            if len(p) == 2:
+                try: return _dth(ad_year, int(p[0]), int(p[1]))
+                except: pass
+            return None
+        data, current_model = [], ''
+        for row in rows[3:]:
+            if len(row) < 8: continue
+            # 型號群組標題列（col0 有值且 col2 不是編號）
+            if row[0].strip() and not row[2].strip().startswith('#'):
+                if row[0].strip() not in ('型號', ''):
+                    current_model = row[0].strip()
+                continue
+            if not row[2].strip().startswith('#'): continue
+            入庫日 = row[1].strip()
+            編號   = row[2].strip()
+            容量   = row[3].strip()
+            顏色   = row[4].strip()
+            收購   = row[5].strip()
+            備註   = row[6].strip()
+            銷售日 = row[7].strip() if len(row) > 7 else ''
+            售價   = row[8].strip() if len(row) > 8 else ''
+            利潤   = row[9].strip() if len(row) > 9 else ''
+            # 月份
+            月份 = ''
+            for d in [銷售日, 入庫日]:
+                dt = _pd(d)
+                if dt: 月份 = f'{dt.month}月'; break
+            # 品牌
+            ml = current_model.lower()
+            if any(x in ml for x in ('iphone','ipad','macbook','apple','airpod')): 品牌 = 'Apple'
+            elif 'samsung' in ml: 品牌 = 'Samsung'
+            elif 'oppo' in ml:   品牌 = 'OPPO'
+            elif 'vivo' in ml:   品牌 = 'Vivo'
+            elif any(x in ml for x in ('小米','xiaomi','redmi')): 品牌 = '小米'
+            elif any(x in ml for x in ('google','pixel')):        品牌 = 'Google'
+            elif any(x in ml for x in ('asus','華碩')):           品牌 = 'ASUS'
+            elif 'realme' in ml: 品牌 = 'Realme'
+            else: 品牌 = '其他'
+            # 狀態 & 毛利率
+            狀態 = '已售出' if 銷售日 else '庫存中'
+            try:
+                s_n = float(售價.replace('$','').replace(',','')) if 售價 else 0
+                p_n = float(利潤.replace('$','').replace(',','')) if 利潤 else 0
+                毛利率 = f'{p_n/s_n*100:.2f}' if s_n else '0'
+            except: 毛利率 = '0'
+            # 正規化成 16 欄（月份/入庫/品牌/型號/編號/容量/顏色/收購/IMEI/備註/銷售日/售價/利潤/毛利率/客備/狀態）
+            data.append([月份, 入庫日, 品牌, current_model, 編號, 容量, 顏色,
+                         收購, '', 備註, 銷售日, 售價, 利潤, 毛利率, '', 狀態])
+        return data
+
     # ── 讀取主資料庫 CSV（銷售紀錄）────────────────────────────────
     try:
         import requests as _req
@@ -1630,7 +1691,10 @@ def sales_dashboard():
         resp = _req.get(CSV_URL, timeout=15)
         resp.encoding = 'utf-8-sig'
         all_csv = list(csv.reader(io.StringIO(resp.text)))
-        data_rows = [row for row in all_csv[1:] if len(row) >= 16]
+        if year_param == '115':
+            data_rows = [row for row in all_csv[1:] if len(row) >= 16]
+        else:
+            data_rows = _parse_hist(all_csv, year_param)
         data_ok = True
     except Exception as _e:
         logger.error(f'sales_dashboard CSV error: {_e}')
