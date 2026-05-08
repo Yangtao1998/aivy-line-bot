@@ -1639,7 +1639,13 @@ def sales_dashboard():
         inv_resp.encoding = 'utf-8-sig'
         inv_csv = list(csv.reader(io.StringIO(inv_resp.text)))
         # 跳過標題列，只取有編號的資料列（col 0 以 # 開頭）
-        inv_rows = [r for r in inv_csv[1:] if len(r) >= 13 and r[0].strip().startswith('#')]
+        # 欄位：編號(0) 顏色emoji(1) 狀態(2) 型號(3) 容量(4) 顏色(5)
+        #       電池(6) IMEI(7) _(8) 維修(9) 盒子(10) 版本(11) 成本價(12) 建議售價(13)
+        # 只計算狀態='在庫' 的列（排除已售出未銷帳的 COD 等）
+        inv_rows = [r for r in inv_csv[1:]
+                    if len(r) >= 13
+                    and r[0].strip().startswith('#')
+                    and r[2].strip() == '在庫']
         inv_ok = True
     except Exception as _e:
         logger.error(f'inventory CSV error: {_e}')
@@ -1647,7 +1653,7 @@ def sales_dashboard():
         inv_ok = False
 
     def num(s):
-        try: return float(s.replace(',','').replace('NT$','').replace('%','').strip())
+        try: return float(s.replace(',','').replace('NT$','').replace('$','').replace('%','').strip())
         except Exception: return 0.0
 
     from datetime import datetime as _dt, date as _date
