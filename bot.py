@@ -2197,6 +2197,12 @@ def sales_dashboard():
     model_profit_top10 = sorted(_mod_prf.items(), key=lambda x: x[1], reverse=True)[:10]
     _max_mp = model_profit_top10[0][1] if model_profit_top10 else 1
 
+    # 銷售數量型號排行 TOP15
+    _mod_qty = defaultdict(int)
+    for _r in sold_all: _mod_qty[_r[3].strip()] += 1
+    model_qty_top15 = sorted(_mod_qty.items(), key=lambda x: x[1], reverse=True)[:15]
+    _max_mq = model_qty_top15[0][1] if model_qty_top15 else 1
+
     # ── 危險庫存 HTML ─────────────────────────────────────────────
     def _crit_item(x):
         _d   = x['days']
@@ -2281,6 +2287,37 @@ def sales_dashboard():
     if not _bar_html:
         _bar_html = ('<div style="text-align:center;padding:20px;color:#9ca3af;'
                      'font-size:12px">尚無銷售資料</div>')
+
+    # ── 銷售數量型號排行 HTML ─────────────────────────────────────
+    _qty_cols_left  = ['#2563eb','#3b82f6','#60a5fa','#93c5fd','#bfdbfe',
+                       '#dbeafe','#eff6ff','#e0f2fe']
+    _qty_cols_right = ['#7c3aed','#8b5cf6','#a78bfa','#c4b5fd','#ddd6fe',
+                       '#ede9fe','#f5f3ff','#faf5ff']
+    _qty_medals = ['🥇','🥈','🥉']
+    # 左右兩欄，各放一半
+    _qty_left  = model_qty_top15[:8]
+    _qty_right = model_qty_top15[8:]
+
+    def _qty_bar(i, m, q, col):
+        _w   = int(q / _max_mq * 100)
+        _lbl = _qty_medals[i] if i < 3 else f'{i+1}.'
+        return (
+            f'<div class="bar-item">'
+            f'<div class="bar-header">'
+            f'<span class="bar-model">{_lbl} {m}</span>'
+            f'<span class="bar-val" style="color:{col}">{q} 台</span>'
+            f'</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{_w}%;background:{col}"></div></div>'
+            f'</div>'
+        )
+
+    _qty_left_html  = ''.join(_qty_bar(i, m, q, _qty_cols_left[i % len(_qty_cols_left)])
+                               for i, (m, q) in enumerate(_qty_left))
+    _qty_right_html = ''.join(_qty_bar(i + len(_qty_left), m, q,
+                                        _qty_cols_right[i % len(_qty_cols_right)])
+                               for i, (m, q) in enumerate(_qty_right))
+    if not _qty_left_html:
+        _qty_left_html = '<div style="color:#9ca3af;font-size:12px;padding:12px">尚無銷售資料</div>'
 
     # ── 平台獲利 HTML（placeholder，待加銷貨渠道欄位）────────────
     _platform_html = (
@@ -2542,6 +2579,26 @@ def sales_dashboard():
         <div class="card-hd">🌐 平台獲利排行（今年）</div>
         <div class="card-body">
           {_platform_html}
+        </div>
+      </div>
+    </div>
+
+    <!-- ════ 第四區：銷售數量型號排行 ════ -->
+    <div class="sec-hd" style="margin-top:32px">
+      <div class="sec-icon" style="background:#eff6ff">📊</div>
+      <div>
+        <div class="sec-title">銷售數量型號排行</div>
+        <div class="sec-sub">今年累積 · 共 {len(sold_all):,} 台 · TOP 15 型號</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:40px">
+      <div class="card-body">
+        <div style="display:grid;grid-template-columns:1fr;gap:0 32px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px">
+            <div>{_qty_left_html}</div>
+            <div>{_qty_right_html}</div>
+          </div>
         </div>
       </div>
     </div>
