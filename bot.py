@@ -2147,12 +2147,13 @@ def sales_dashboard():
 
     # iPhone: col17=入庫時間, col3=型號, col12=成本, col0=#編號
     _ip_items = _build_age_items(inv_rows,     17, 3,  12, 0)
-    # Android: col17=入庫時間, col4=型號, col12=成本, col2=#編號
+    # Android: col17=入庫時間, col4=型號, col12=成本, col2=#編號（僅用於總成本/總數量）
     _an_items = _build_age_items(android_rows, 17, 4,  12, 2)
-    _all_items  = _ip_items + _an_items
-    _age_known  = [x for x in _all_items if x['days'] is not None]
 
-    avg_inv_age = (sum(x['days'] for x in _age_known) / len(_age_known)) if _age_known else 0
+    # 平均庫齡 / 危險警示 / 滯銷排行 ── 只看 iPhone
+    _iphone_age_known = [x for x in _ip_items if x['days'] is not None]
+
+    avg_inv_age = (sum(x['days'] for x in _iphone_age_known) / len(_iphone_age_known)) if _iphone_age_known else 0
     _age_color  = '#16a34a' if avg_inv_age < 14 else '#ea580c' if avg_inv_age < 30 else '#dc2626'
     _age_status = '健康' if avg_inv_age < 14 else '注意' if avg_inv_age < 30 else '警告'
 
@@ -2161,14 +2162,14 @@ def sales_dashboard():
     _tr_color  = '#16a34a' if turnover_rate >= 80 else '#ea580c' if turnover_rate >= 60 else '#dc2626'
     _tr_status = '優秀' if turnover_rate >= 80 else '良好' if turnover_rate >= 60 else '需注意'
 
-    # ── 危險庫存（庫齡 > 30 天）─────────────────────────────────
-    critical_inv  = sorted([x for x in _age_known if x['days'] > 30],
+    # ── 危險庫存（庫齡 > 30 天，只含 iPhone）────────────────────
+    critical_inv  = sorted([x for x in _iphone_age_known if x['days'] > 30],
                             key=lambda x: x['days'], reverse=True)
     _crit_count   = len(critical_inv)
 
-    # ── 滯銷型號 TOP10（按平均庫齡降序）─────────────────────────
+    # ── 滯銷型號 TOP10（只含 iPhone，按平均庫齡降序）─────────────
     _stag_m = defaultdict(list)
-    for x in _age_known:
+    for x in _iphone_age_known:
         if x['model']: _stag_m[x['model']].append(x['days'])
     stagnant_top10 = sorted(
         [{'model': m, 'count': len(ds), 'avg_days': sum(ds) / len(ds)}
@@ -2423,7 +2424,7 @@ def sales_dashboard():
         <div class="kpi-icon" style="background:#f0fdfa">⏱</div>
         <div class="kpi-label">平均庫齡</div>
         <div class="kpi-val" style="color:{_age_color}">{avg_inv_age:.1f} <span style="font-size:.5em;font-weight:500">天</span></div>
-        <div class="kpi-sub">{_age_status} · 目標 &lt; 14 天</div>
+        <div class="kpi-sub">{_age_status} · iPhone · 目標 &lt; 14 天</div>
       </div>
       <div class="kpi" style="--accent:{_tr_color}">
         <div class="kpi-icon" style="background:#f0fdf4">🔄</div>
@@ -2445,7 +2446,7 @@ def sales_dashboard():
     <div class="two-col">
       <div class="card">
         <div class="card-hd" style="border-left:4px solid #dc2626;padding-left:14px">
-          🔴 庫齡 &gt;30 天庫存
+          🔴 iPhone 庫齡 &gt;30 天
           <span style="margin-left:auto;background:#fef2f2;color:#dc2626;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">{_crit_count} 台</span>
         </div>
         <div class="card-body" style="padding:12px 18px">
@@ -2455,7 +2456,7 @@ def sales_dashboard():
 
       <div class="card">
         <div class="card-hd" style="border-left:4px solid #ea580c;padding-left:14px">
-          🐌 滯銷型號 TOP 10
+          🐌 iPhone 滯銷型號 TOP 10
           <span style="margin-left:auto;font-size:11px;color:#9ca3af">依平均庫存等待天數</span>
         </div>
         <div class="card-body" style="padding:12px 0">
