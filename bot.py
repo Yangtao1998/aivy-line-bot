@@ -1650,17 +1650,19 @@ def sales_dashboard():
             c6 = row[6].strip() if len(row) > 6 else ''
             has_imei = c6.isdigit() and len(c6) > 8
             if has_imei:
-                imei   = c6
-                備註   = row[7].strip() if len(row) > 7 else ''
-                銷售日 = row[8].strip() if len(row) > 8 else ''
-                售價   = row[9].strip() if len(row) > 9 else ''
-                利潤   = row[10].strip() if len(row) > 10 else ''
+                imei      = c6
+                備註      = row[7].strip()  if len(row) > 7  else ''
+                銷售日    = row[8].strip()  if len(row) > 8  else ''
+                售價      = row[9].strip()  if len(row) > 9  else ''
+                利潤      = row[10].strip() if len(row) > 10 else ''
+                銷售渠道  = row[14].strip() if len(row) > 14 else ''
             else:
-                imei   = ''
-                備註   = c6
-                銷售日 = row[7].strip() if len(row) > 7 else ''
-                售價   = row[8].strip() if len(row) > 8 else ''
-                利潤   = row[9].strip() if len(row) > 9 else ''
+                imei      = ''
+                備註      = c6
+                銷售日    = row[7].strip()  if len(row) > 7  else ''
+                售價      = row[8].strip()  if len(row) > 8  else ''
+                利潤      = row[9].strip()  if len(row) > 9  else ''
+                銷售渠道  = row[13].strip() if len(row) > 13 else ''
             月份 = ''
             for d in [銷售日, 入庫日]:
                 dt = _pd(d)
@@ -1682,7 +1684,7 @@ def sales_dashboard():
                 毛利率 = f'{p_n/s_n*100:.2f}' if s_n else '0'
             except: 毛利率 = '0'
             data.append([月份, 入庫日, 品牌, current_model, 編號, 容量, 顏色,
-                         收購, imei, 備註, 銷售日, 售價, 利潤, 毛利率, '', 狀態])
+                         收購, imei, 備註, 銷售日, 售價, 利潤, 毛利率, 銷售渠道, 狀態])
         return data
 
     # ── 讀取主資料庫 CSV（115年：合併所有月份分頁）──────────────────
@@ -2331,32 +2333,41 @@ def sales_dashboard():
     if not _qty_left_html:
         _qty_left_html = '<div style="color:#9ca3af;font-size:12px;padding:12px">尚無銷售資料</div>'
 
-    # ── 平台獲利 HTML（placeholder，待加銷貨渠道欄位）────────────
-    _platform_html = (
-        '<div style="font-size:11px;color:#9ca3af;margin-bottom:12px;padding:8px 10px;'
-        'background:#fef9c3;border-radius:6px;border:1px solid #fde047">'
-        '⚠️ 需在銷售紀錄表加入「銷貨渠道」欄位才能顯示真實數據'
-        '</div>'
-        '<div class="platform-item">'
-        '<div class="platform-rank" style="background:#eff6ff;color:#2563eb">1</div>'
-        '<div class="platform-name">🛒 一般消費者</div>'
-        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
-        '</div>'
-        '<div class="platform-item">'
-        '<div class="platform-rank" style="background:#f0fdf4;color:#16a34a">2</div>'
-        '<div class="platform-name">🤝 同行</div>'
-        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
-        '</div>'
-        '<div class="platform-item">'
-        '<div class="platform-rank" style="background:#faf5ff;color:#7c3aed">3</div>'
-        '<div class="platform-name">🇮🇩 印尼</div>'
-        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
-        '</div>'
-        '<div style="margin-top:14px;padding:10px;background:#f8fafc;border-radius:8px;'
-        'font-size:11px;color:#64748b;text-align:center">'
-        '以上為示意 · 串接銷貨渠道欄位後自動計算'
-        '</div>'
-    )
+    # ── 銷貨渠道數量排行 HTML（從 sold_all col14 = 銷售渠道）────────
+    _ch_qty = defaultdict(int)
+    for _r in sold_all:
+        _ch = _r[14].strip()
+        if _ch: _ch_qty[_ch] += 1
+    _ch_data  = sorted(_ch_qty.items(), key=lambda x: x[1], reverse=True)[:8]
+    _ch_total = sum(v for _, v in _ch_data)
+
+    _ch_styles = [
+        ('#eff6ff', '#2563eb'), ('#f0fdf4', '#16a34a'), ('#faf5ff', '#7c3aed'),
+        ('#fff7ed', '#ea580c'), ('#f0fdfa', '#0d9488'), ('#fef9c3', '#ca8a04'),
+        ('#fef2f2', '#dc2626'), ('#f1f5f9', '#475569'),
+    ]
+    if _ch_data:
+        _platform_html = ''
+        for _i, (_name, _qty) in enumerate(_ch_data):
+            _bg, _tc = _ch_styles[_i % len(_ch_styles)]
+            _pct = _qty / _ch_total * 100 if _ch_total else 0
+            _platform_html += (
+                f'<div class="platform-item">'
+                f'<div class="platform-rank" style="background:{_bg};color:{_tc}">{_i+1}</div>'
+                f'<div class="platform-name">{_name}</div>'
+                f'<div>'
+                f'<div class="platform-profit" style="color:{_tc}">{_qty} 台</div>'
+                f'<div class="platform-pct">{_pct:.1f}% · 共 {_ch_total} 台</div>'
+                f'</div>'
+                f'</div>'
+            )
+    else:
+        _platform_html = (
+            '<div style="text-align:center;padding:24px;color:#9ca3af;font-size:12px">'
+            '尚無銷售渠道資料<br>'
+            '<span style="font-size:11px">請確認試算表 col14 已填入渠道名稱</span>'
+            '</div>'
+        )
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -2588,7 +2599,7 @@ def sales_dashboard():
       </div>
 
       <div class="card">
-        <div class="card-hd">🌐 平台獲利排行（今年）</div>
+        <div class="card-hd">🌐 銷貨渠道數量排行（今年）</div>
         <div class="card-body">
           {_platform_html}
         </div>
