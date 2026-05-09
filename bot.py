@@ -2101,320 +2101,419 @@ def sales_dashboard():
           <td style="text-align:right;font-weight:700;color:{tmc}">{margin_pct:.1f}%</td>
         </tr>'''
 
-    # ── 品牌統計 ──────────────────────────────────────────────────
-    b_cnt = defaultdict(int)
-    for r in sold:
-        b_cnt[r[2].strip()] += 1
-    brand_sorted = sorted(b_cnt.items(), key=lambda x: x[1], reverse=True)
-    brand_labels = [b for b, _ in brand_sorted]
-    brand_vals   = [c for _, c in brand_sorted]
-    brand_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
-                    '#0891b2','#ca8a04','#db2777','#64748b','#475569',
-                    '#0d9488','#b45309']
+    # ══════════════════════════════════════════════════════════════
+    # 新版三區儀表板數據準備
+    # ══════════════════════════════════════════════════════════════
 
-    # ── Top 10 型號 ───────────────────────────────────────────────
-    mo_cnt = defaultdict(int)
-    for r in sold:
-        mo_cnt[r[3].strip()] += 1
-    top10 = sorted(mo_cnt.items(), key=lambda x: x[1], reverse=True)[:10]
-    top10_labels = [m for m, _ in top10]
-    top10_vals   = [c for _, c in top10]
-    top10_colors = ['#2563eb','#16a34a','#ea580c','#dc2626','#7c3aed',
-                    '#0891b2','#ca8a04','#db2777','#64748b','#475569']
+    # ── 庫齡計算（庫存表 col17 入庫時間）─────────────────────────
+    from datetime import datetime as _dt2
+    _today_dt = _dt2.today()
+
+    def _parse_inv_date(s):
+        s = s.strip()
+        if not s: return None
+        for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d', '%Y/%m/%d'):
+            try: return _dt2.strptime(s, fmt)
+            except: pass
+        p = s.split('/')
+        if len(p) == 2:
+            try: return _dt2(_today_dt.year, int(p[0]), int(p[1]))
+            except: pass
+        return None
+
+    def _build_age_items(r_list, col_dt, col_model, col_cost, col_id):
+        out = []
+        for r in r_list:
+            _dtv = _parse_inv_date(r[col_dt]) if len(r) > col_dt else None
+            _age = max((_today_dt - _dtv).days, 0) if _dtv else None
+            out.append({
+                'days':     _age,
+                'model':    r[col_model].strip() if len(r) > col_model else '',
+                'number':   r[col_id].strip()    if len(r) > col_id    else '',
+                'date_str': r[col_dt].strip()[:10] if len(r) > col_dt  else '',
+                'cost':     num(r[col_cost])     if len(r) > col_cost  else 0,
+            })
+        return out
+
+    # iPhone: col17=入庫時間, col3=型號, col12=成本, col0=#編號
+    _ip_items = _build_age_items(inv_rows,     17, 3,  12, 0)
+    # Android: col17=入庫時間, col4=型號, col12=成本, col2=#編號
+    _an_items = _build_age_items(android_rows, 17, 4,  12, 2)
+    _all_items  = _ip_items + _an_items
+    _age_known  = [x for x in _all_items if x['days'] is not None]
+
+    avg_inv_age = (sum(x['days'] for x in _age_known) / len(_age_known)) if _age_known else 0
+    _age_color  = '#16a34a' if avg_inv_age < 14 else '#ea580c' if avg_inv_age < 30 else '#dc2626'
+    _age_status = '健康' if avg_inv_age < 14 else '注意' if avg_inv_age < 30 else '警告'
+
+    turnover_rate = (len(sold_all) / (len(sold_all) + inv_total_qty) * 100) \
+                    if (len(sold_all) + inv_total_qty) > 0 else 0
+    _tr_color  = '#16a34a' if turnover_rate >= 80 else '#ea580c' if turnover_rate >= 60 else '#dc2626'
+    _tr_status = '優秀' if turnover_rate >= 80 else '良好' if turnover_rate >= 60 else '需注意'
+
+    # ── 危險庫存（庫齡 > 30 天）─────────────────────────────────
+    critical_inv  = sorted([x for x in _age_known if x['days'] > 30],
+                            key=lambda x: x['days'], reverse=True)
+    _crit_count   = len(critical_inv)
+
+    # ── 滯銷型號 TOP10（按平均庫齡降序）─────────────────────────
+    _stag_m = defaultdict(list)
+    for x in _age_known:
+        if x['model']: _stag_m[x['model']].append(x['days'])
+    stagnant_top10 = sorted(
+        [{'model': m, 'count': len(ds), 'avg_days': sum(ds) / len(ds)}
+         for m, ds in _stag_m.items()],
+        key=lambda x: x['avg_days'], reverse=True
+    )[:10]
+
+    # ── Section 3：賺錢能力（永遠基於全年 sold_all）─────────────
+    _cur_mo_sold  = [r for r in sold_all if r[0].strip() == current_mo]
+    cur_mo_profit = sum(num(r[12]) for r in _cur_mo_sold)
+    cur_mo_qty    = len(_cur_mo_sold)
+    cur_mo_avg    = cur_mo_profit / cur_mo_qty if cur_mo_qty else 0
+
+    yr_profit_total = sum(num(r[12]) for r in sold_all)
+    yr_rev_total    = sum(num(r[11]) for r in sold_all)
+    yr_margin_pct   = (yr_profit_total / yr_rev_total * 100) if yr_rev_total else 0
+
+    _m_prf_all = defaultdict(float)
+    for _r in sold_all: _m_prf_all[_r[0].strip()] += num(_r[12])
+    best_mo   = max(_m_prf_all, key=_m_prf_all.get) if _m_prf_all else '-'
+    best_mo_p = _m_prf_all.get(best_mo, 0)
+
+    _mod_prf = defaultdict(float)
+    for _r in sold_all: _mod_prf[_r[3].strip()] += num(_r[12])
+    model_profit_top10 = sorted(_mod_prf.items(), key=lambda x: x[1], reverse=True)[:10]
+    _max_mp = model_profit_top10[0][1] if model_profit_top10 else 1
+
+    # ── 危險庫存 HTML ─────────────────────────────────────────────
+    _crit_html = ''
+    for _x in critical_inv[:5]:
+        _d   = _x['days']
+        _cls = 'critical' if _d > 60 else 'warn'
+        _crit_html += (
+            f'<div class="stag-item">'
+            f'<div class="stag-days {_cls}">{_d}<br>'
+            f'<span style="font-size:9px;font-weight:500">天</span></div>'
+            f'<div class="stag-info">'
+            f'<div class="stag-model">{_x["model"]}</div>'
+            f'<div class="stag-meta">{_x["number"]} · 入庫 {_x["date_str"]}</div>'
+            f'</div>'
+            f'<div class="stag-cost">NT${_x["cost"]:,.0f}</div>'
+            f'</div>'
+        )
+    _crit_extra = _crit_count - 5
+    if _crit_extra > 0:
+        _crit_html += (f'<div style="text-align:center;padding:10px 0;font-size:11px;color:#9ca3af">'
+                       f'還有 {_crit_extra} 台未顯示</div>')
+    if not _crit_html:
+        _crit_html = ('<div style="text-align:center;padding:24px;color:#16a34a;'
+                      'font-size:13px;font-weight:600">✅ 目前沒有庫齡超過 30 天的庫存</div>')
+
+    # ── 滯銷排行表格 HTML ──────────────────────────────────────────
+    _stag_rows = ''
+    for _i, _s in enumerate(stagnant_top10):
+        _d  = _s['avg_days']
+        _dc = '#dc2626' if _d > 30 else '#ea580c' if _d > 14 else '#0d9488'
+        _stag_rows += (
+            f'<tr>'
+            f'<td style="padding-left:18px;font-weight:700;color:{_dc}">{_i+1}</td>'
+            f'<td style="font-size:12px">{_s["model"]}</td>'
+            f'<td style="text-align:right">{_s["count"]}</td>'
+            f'<td style="text-align:right;padding-right:18px;font-weight:700;color:{_dc}">{_d:.0f} 天</td>'
+            f'</tr>'
+        )
+    if not _stag_rows:
+        _stag_rows = ('<tr><td colspan="4" style="text-align:center;padding:20px;'
+                      'color:#9ca3af">無庫存資料</td></tr>')
+
+    # ── 型號獲利長條圖 HTML ────────────────────────────────────────
+    _bar_cols = ['#16a34a','#22c55e','#4ade80','#0891b2','#7c3aed',
+                 '#64748b','#ea580c','#dc2626','#ca8a04','#0d9488']
+    _medals   = ['🥇','🥈','🥉']
+    _bar_html = ''
+    for _i, (_m, _p) in enumerate(model_profit_top10):
+        _w   = int(_p / _max_mp * 100) if _max_mp else 0
+        _lbl = _medals[_i] if _i < 3 else f'{_i+1}.'
+        _col = _bar_cols[_i % len(_bar_cols)]
+        _bar_html += (
+            f'<div class="bar-item">'
+            f'<div class="bar-header">'
+            f'<span class="bar-model">{_lbl} {_m}</span>'
+            f'<span class="bar-val" style="color:{_col}">NT${int(_p):,}</span>'
+            f'</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{_w}%;background:{_col}"></div></div>'
+            f'</div>'
+        )
+    if not _bar_html:
+        _bar_html = ('<div style="text-align:center;padding:20px;color:#9ca3af;'
+                     'font-size:12px">尚無銷售資料</div>')
+
+    # ── 平台獲利 HTML（placeholder，待加銷貨渠道欄位）────────────
+    _platform_html = (
+        '<div style="font-size:11px;color:#9ca3af;margin-bottom:12px;padding:8px 10px;'
+        'background:#fef9c3;border-radius:6px;border:1px solid #fde047">'
+        '⚠️ 需在銷售紀錄表加入「銷貨渠道」欄位才能顯示真實數據'
+        '</div>'
+        '<div class="platform-item">'
+        '<div class="platform-rank" style="background:#eff6ff;color:#2563eb">1</div>'
+        '<div class="platform-name">🛒 一般消費者</div>'
+        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
+        '</div>'
+        '<div class="platform-item">'
+        '<div class="platform-rank" style="background:#f0fdf4;color:#16a34a">2</div>'
+        '<div class="platform-name">🤝 同行</div>'
+        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
+        '</div>'
+        '<div class="platform-item">'
+        '<div class="platform-rank" style="background:#faf5ff;color:#7c3aed">3</div>'
+        '<div class="platform-name">🇮🇩 印尼</div>'
+        '<div><div class="platform-profit" style="color:#9ca3af">—</div></div>'
+        '</div>'
+        '<div style="margin-top:14px;padding:10px;background:#f8fafc;border-radius:8px;'
+        'font-size:11px;color:#64748b;text-align:center">'
+        '以上為示意 · 串接銷貨渠道欄位後自動計算'
+        '</div>'
+    )
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-Hant">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>艾薇通訊 — 二手機銷售儀表板</title>
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <title>艾薇通訊 — 二手機庫存儀表板</title>
   <style>
     :root {{
-      --bg:#f5f6fa;--white:#fff;--border:#e8eaed;--text:#1a1d23;
-      --text2:#4b5563;--gray:#9ca3af;--accent:#2563eb;
-      --green:#16a34a;--red:#dc2626;--orange:#ea580c;
+      --bg:#f5f6fa;--white:#fff;--border:#e8eaed;
+      --text:#1a1d23;--text2:#4b5563;--gray:#9ca3af;
+      --blue:#2563eb;--green:#16a34a;--red:#dc2626;
+      --orange:#ea580c;--purple:#7c3aed;--teal:#0d9488;
       --shadow:0 1px 4px rgba(0,0,0,.06),0 4px 16px rgba(0,0,0,.04);
     }}
     *{{box-sizing:border-box;margin:0;padding:0}}
     body{{font-family:'Segoe UI',system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--text)}}
     .header{{background:var(--white);border-bottom:1px solid var(--border);
-             padding:0 28px;height:56px;display:flex;align-items:center;gap:16px;
+             padding:0 28px;height:56px;display:flex;align-items:center;gap:14px;
              position:sticky;top:0;z-index:100}}
-    .logo{{font-size:16px;font-weight:700;color:var(--text);letter-spacing:-.3px}}
-    .logo em{{color:var(--accent);font-style:normal}}
-    .live-badge{{display:flex;align-items:center;gap:5px;background:#f0fdf4;
-                 border:1px solid #bbf7d0;color:var(--green);padding:3px 10px;
-                 border-radius:20px;font-size:11px;font-weight:700}}
-    .live-dot{{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 1.6s infinite}}
+    .logo{{font-size:16px;font-weight:700}}
+    .logo em{{color:var(--blue);font-style:normal}}
+    .badge{{display:flex;align-items:center;gap:5px;background:#f0fdf4;
+            border:1px solid #bbf7d0;color:var(--green);padding:3px 10px;
+            border-radius:20px;font-size:11px;font-weight:700}}
+    .dot{{width:6px;height:6px;border-radius:50%;background:var(--green);animation:blink 1.6s infinite}}
     @keyframes blink{{0%,100%{{opacity:1}}50%{{opacity:.3}}}}
-    .header-right{{margin-left:auto;font-size:12px;color:var(--gray)}}
+    .header-note{{margin-left:auto;font-size:12px;color:var(--gray)}}
     .container{{max-width:1080px;margin:0 auto;padding:28px 20px}}
-    .sec-hd{{margin:28px 0 12px}}
-    .sec-title{{font-size:15px;font-weight:700;color:var(--text);display:flex;align-items:center;gap:8px;margin-bottom:3px}}
-    .sec-icon{{width:28px;height:28px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}}
-    .sec-desc{{font-size:12px;color:var(--gray);margin-left:36px}}
-    .card{{background:var(--white);border:1px solid var(--border);border-radius:12px;box-shadow:var(--shadow);margin-bottom:24px;overflow:hidden}}
-    .card-body{{padding:20px}}
-    .kpi-grid{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:24px}}
-    @media(min-width:520px){{.kpi-grid{{grid-template-columns:repeat(4,1fr)}}}}
-    @media(min-width:900px){{.kpi-grid{{grid-template-columns:repeat(8,1fr)}}}}
-    .kpi-card{{background:var(--white);border:1px solid var(--border);border-radius:12px;
-               padding:18px 12px;text-align:center;box-shadow:var(--shadow)}}
-    .kpi-icon{{width:36px;height:36px;border-radius:10px;display:flex;align-items:center;
-               justify-content:center;font-size:17px;margin:0 auto 10px}}
-    .kpi-label{{font-size:11px;color:var(--gray);font-weight:600;margin-bottom:6px}}
-    .kpi-val{{font-size:1.3em;font-weight:800;letter-spacing:-.5px;line-height:1}}
+    .sec-hd{{margin:28px 0 14px;display:flex;align-items:center;gap:10px}}
+    .sec-icon{{width:32px;height:32px;border-radius:8px;display:flex;align-items:center;
+               justify-content:center;font-size:16px;flex-shrink:0}}
+    .sec-title{{font-size:16px;font-weight:800}}
+    .sec-sub{{font-size:12px;color:var(--gray)}}
+    .kpi-grid-4{{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}}
+    @media(min-width:600px){{.kpi-grid-4{{grid-template-columns:repeat(4,1fr)}}}}
+    .kpi{{background:var(--white);border:1px solid var(--border);border-radius:14px;
+          padding:20px 16px;text-align:center;box-shadow:var(--shadow);
+          position:relative;overflow:hidden}}
+    .kpi::before{{content:'';position:absolute;top:0;left:0;right:0;height:3px;
+                  background:var(--accent,var(--blue))}}
+    .kpi-icon{{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;
+               justify-content:center;font-size:18px;margin:0 auto 10px}}
+    .kpi-label{{font-size:11px;color:var(--gray);font-weight:600;margin-bottom:8px;letter-spacing:.3px}}
+    .kpi-val{{font-size:1.5em;font-weight:900;letter-spacing:-.5px;line-height:1}}
+    .kpi-sub{{font-size:11px;color:var(--gray);margin-top:6px}}
     .two-col{{display:grid;grid-template-columns:1fr;gap:16px}}
     @media(min-width:700px){{.two-col{{grid-template-columns:1fr 1fr}}}}
-    .four-col{{display:grid;grid-template-columns:1fr;gap:16px;margin-bottom:24px}}
-    @media(min-width:700px){{.four-col{{grid-template-columns:1fr 1fr}}}}
-    @media(min-width:1000px){{.four-col{{grid-template-columns:repeat(4,1fr)}}}}
-    .chart-wrap{{position:relative;height:260px}}
-    table.mtable{{width:100%;border-collapse:collapse;font-size:13px}}
-    table.mtable th{{background:var(--bg);padding:8px 12px;text-align:left;
-                     font-weight:700;font-size:12px;color:var(--text2);border-bottom:2px solid var(--border)}}
-    table.mtable td{{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}}
-    table.mtable tr:last-child td{{border-bottom:none}}
-    .time-bar{{background:var(--white);border-bottom:1px solid var(--border);
-               padding:0 28px;height:44px;display:flex;align-items:center;gap:6px;flex-wrap:wrap}}
-    .time-label{{font-size:12px;color:var(--gray);margin-right:6px;font-weight:500}}
-    .range-btn{{padding:5px 14px;border-radius:6px;font-size:12px;font-weight:600;
-                cursor:pointer;border:1px solid var(--border);background:transparent;
-                color:var(--text2);text-decoration:none;transition:all .15s;white-space:nowrap}}
-    .range-btn:hover{{background:var(--bg);border-color:#d1d5db}}
-    .range-btn.active{{background:var(--accent);border-color:var(--accent);color:#fff}}
-    .divider-v{{width:1px;height:20px;background:var(--border);margin:0 4px}}
+    .three-col{{display:grid;grid-template-columns:1fr;gap:16px}}
+    @media(min-width:900px){{.three-col{{grid-template-columns:1fr 1fr 1fr}}}}
+    .card{{background:var(--white);border:1px solid var(--border);border-radius:14px;
+           box-shadow:var(--shadow);overflow:hidden}}
+    .card-hd{{padding:14px 18px 10px;border-bottom:1px solid var(--border);
+              font-size:13px;font-weight:700;display:flex;align-items:center;gap:8px}}
+    .card-body{{padding:16px 18px}}
+    table{{width:100%;border-collapse:collapse;font-size:12px}}
+    thead th{{background:var(--bg);padding:8px 12px;text-align:left;font-weight:700;
+              font-size:11px;color:var(--text2);border-bottom:2px solid var(--border)}}
+    tbody td{{padding:9px 12px;border-bottom:1px solid var(--border);color:var(--text)}}
+    tbody tr:last-child td{{border-bottom:none}}
+    tbody tr:hover{{background:#f8fafc}}
+    .stag-item{{display:flex;align-items:center;gap:10px;padding:9px 0;
+                border-bottom:1px solid var(--border)}}
+    .stag-item:last-child{{border-bottom:none}}
+    .stag-days{{min-width:44px;height:44px;border-radius:10px;display:flex;flex-direction:column;
+                align-items:center;justify-content:center;font-size:13px;font-weight:900;
+                flex-shrink:0;line-height:1.2}}
+    .stag-days.critical{{background:#fef2f2;color:var(--red)}}
+    .stag-days.warn{{background:#fff7ed;color:var(--orange)}}
+    .stag-info{{flex:1;min-width:0}}
+    .stag-model{{font-size:12px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
+    .stag-meta{{font-size:11px;color:var(--gray);margin-top:2px}}
+    .stag-cost{{font-size:12px;font-weight:700;color:var(--red);flex-shrink:0}}
+    .bar-item{{margin-bottom:10px}}
+    .bar-item:last-child{{margin-bottom:0}}
+    .bar-header{{display:flex;justify-content:space-between;margin-bottom:4px;font-size:12px}}
+    .bar-model{{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:160px}}
+    .bar-val{{font-weight:800;flex-shrink:0}}
+    .bar-track{{height:8px;background:#f1f5f9;border-radius:4px;overflow:hidden}}
+    .bar-fill{{height:100%;border-radius:4px;transition:width .6s ease}}
+    .profit-big{{background:linear-gradient(135deg,#16a34a 0%,#15803d 100%);
+                 border-radius:14px;padding:24px;color:white;margin-bottom:16px}}
+    .profit-big .label{{font-size:12px;opacity:.8;margin-bottom:8px}}
+    .profit-big .amount{{font-size:2.2em;font-weight:900;line-height:1}}
+    .profit-big .sub{{font-size:12px;opacity:.75;margin-top:8px}}
+    .profit-mini-row{{display:grid;grid-template-columns:1fr 1fr;gap:10px}}
+    .profit-mini{{background:var(--white);border:1px solid var(--border);
+                  border-radius:10px;padding:14px 12px;text-align:center}}
+    .profit-mini .lbl{{font-size:11px;color:var(--gray);margin-bottom:4px}}
+    .profit-mini .val{{font-size:1.1em;font-weight:800;color:var(--green)}}
+    .platform-item{{display:flex;align-items:center;gap:12px;padding:10px 0;
+                    border-bottom:1px solid var(--border)}}
+    .platform-item:last-child{{border-bottom:none}}
+    .platform-rank{{width:28px;height:28px;border-radius:8px;display:flex;align-items:center;
+                    justify-content:center;font-size:13px;font-weight:900;flex-shrink:0}}
+    .platform-name{{flex:1;font-size:13px;font-weight:600}}
+    .platform-profit{{font-size:13px;font-weight:800;color:var(--green)}}
+    .platform-pct{{font-size:11px;color:var(--gray)}}
     .error-banner{{background:#fef2f2;border:1px solid #fecaca;color:#dc2626;
                    padding:14px 20px;border-radius:10px;margin-bottom:20px;font-size:13px}}
   </style>
 </head>
 <body>
   <div class="header">
-    <div class="logo"><em>艾薇</em>通訊 — 二手機銷售儀表板</div>
-    <div class="live-badge"><div class="live-dot"></div>{year_param} 年度</div>
-    <div class="header-right">資料來源：Google Sheets &nbsp;·&nbsp; 每日 08:00 自動同步</div>
+    <div class="logo"><em>艾薇</em>通訊 — 二手機庫存儀表板</div>
+    <div class="badge"><div class="dot"></div>{year_param} 年度</div>
+    <div class="header-note">資料來源：Google Sheets · 每次開啟即時同步</div>
   </div>
-  {time_bar_html}
 
   <div class="container">
     {'<div class="error-banner">⚠️ 無法載入試算表資料，請確認試算表已設定為「知道連結的人均可查看」。</div>' if not data_ok else ''}
 
+    <!-- ════ 第一區：庫存健康度 ════ -->
     <div class="sec-hd">
-      <div class="sec-title"><div class="sec-icon" style="background:#eff6ff">📊</div>整體績效指標</div>
-      <div class="sec-desc">篩選區間：{range_label} · 已售 {len(sold):,} 台 · 庫存 {len(stock):,} 台</div>
+      <div class="sec-icon" style="background:#eff6ff">💚</div>
+      <div>
+        <div class="sec-title">庫存健康度</div>
+        <div class="sec-sub">庫存現況一眼看清楚 · 即時數據</div>
+      </div>
     </div>
-    <div class="kpi-grid">{kpi_cards}</div>
 
-    {inv_detail_section}
+    <div class="kpi-grid-4" style="margin-bottom:28px">
+      <div class="kpi" style="--accent:#2563eb">
+        <div class="kpi-icon" style="background:#eff6ff">📦</div>
+        <div class="kpi-label">總庫存數</div>
+        <div class="kpi-val" style="color:#2563eb">{inv_total_qty} 台</div>
+        <div class="kpi-sub">iPhone {iphone_inv_qty} · Android {android_inv_qty}</div>
+      </div>
+      <div class="kpi" style="--accent:#b45309">
+        <div class="kpi-icon" style="background:#fff7ed">💼</div>
+        <div class="kpi-label">總庫存成本</div>
+        <div class="kpi-val" style="color:#b45309">NT${inv_total_cost:,.0f}</div>
+        <div class="kpi-sub">資金佔用總額</div>
+      </div>
+      <div class="kpi" style="--accent:{_age_color}">
+        <div class="kpi-icon" style="background:#f0fdfa">⏱</div>
+        <div class="kpi-label">平均庫齡</div>
+        <div class="kpi-val" style="color:{_age_color}">{avg_inv_age:.1f} <span style="font-size:.5em;font-weight:500">天</span></div>
+        <div class="kpi-sub">{_age_status} · 目標 &lt; 14 天</div>
+      </div>
+      <div class="kpi" style="--accent:{_tr_color}">
+        <div class="kpi-icon" style="background:#f0fdf4">🔄</div>
+        <div class="kpi-label">整體周轉率</div>
+        <div class="kpi-val" style="color:{_tr_color}">{turnover_rate:.1f}<span style="font-size:.5em;font-weight:500">%</span></div>
+        <div class="kpi-sub">{_tr_status} · 已售 {len(sold_all):,} / 總入庫 {len(sold_all) + inv_total_qty:,}</div>
+      </div>
+    </div>
 
+    <!-- ════ 第二區：危險警示 ════ -->
     <div class="sec-hd">
-      <div class="sec-title"><div class="sec-icon" style="background:#f0fdf4">📅</div>各月份銷售趨勢</div>
+      <div class="sec-icon" style="background:#fef2f2">🚨</div>
+      <div>
+        <div class="sec-title">危險警示</div>
+        <div class="sec-sub">需要立即關注的庫存問題</div>
+      </div>
     </div>
+
     <div class="two-col">
       <div class="card">
-        <div class="card-body">
-          <div class="chart-wrap"><canvas id="monthChart"></canvas></div>
+        <div class="card-hd" style="border-left:4px solid #dc2626;padding-left:14px">
+          🔴 庫齡 &gt;30 天庫存
+          <span style="margin-left:auto;background:#fef2f2;color:#dc2626;border-radius:6px;padding:2px 8px;font-size:11px;font-weight:700">{_crit_count} 台</span>
+        </div>
+        <div class="card-body" style="padding:12px 18px">
+          {_crit_html}
         </div>
       </div>
+
       <div class="card">
-        <div class="card-body" style="padding:0">
-          <table class="mtable">
+        <div class="card-hd" style="border-left:4px solid #ea580c;padding-left:14px">
+          🐌 滯銷型號 TOP 10
+          <span style="margin-left:auto;font-size:11px;color:#9ca3af">依平均庫存等待天數</span>
+        </div>
+        <div class="card-body" style="padding:12px 0">
+          <table>
             <thead><tr>
-              <th>月份</th>
-              <th style="text-align:right">台數</th>
-              <th style="text-align:right">銷售額</th>
-              <th style="text-align:right">毛利</th>
-              <th style="text-align:right">毛利率</th>
+              <th style="padding-left:18px">#</th>
+              <th>型號</th>
+              <th style="text-align:right">庫存台數</th>
+              <th style="text-align:right;padding-right:18px">平均等待</th>
             </tr></thead>
-            <tbody>{month_rows_html}</tbody>
+            <tbody>{_stag_rows}</tbody>
           </table>
         </div>
       </div>
     </div>
 
-    <div class="sec-hd">
-      <div class="sec-title"><div class="sec-icon" style="background:#f0fdfa">⏱</div>在庫天數分析</div>
-      <div class="sec-desc">平均賣出需要幾天 — 越短代表周轉越快、資金佔用越少</div>
+    <!-- ════ 第三區：賺錢能力 ════ -->
+    <div class="sec-hd" style="margin-top:32px">
+      <div class="sec-icon" style="background:#f0fdf4">💰</div>
+      <div>
+        <div class="sec-title">賺錢能力</div>
+        <div class="sec-sub">毛利表現 · 依型號 &amp; 平台分析</div>
+      </div>
     </div>
-    <div class="two-col">
+
+    <div class="three-col" style="margin-bottom:40px">
+      <div>
+        <div class="profit-big">
+          <div class="label">📅 本月毛利（{current_mo}）</div>
+          <div class="amount">NT${cur_mo_profit:,.0f}</div>
+          <div class="sub">已售 {cur_mo_qty} 台 · 均單利 NT${cur_mo_avg:,.0f}</div>
+        </div>
+        <div class="profit-mini-row">
+          <div class="profit-mini">
+            <div class="lbl">今年累積毛利</div>
+            <div class="val">NT${yr_profit_total:,.0f}</div>
+          </div>
+          <div class="profit-mini">
+            <div class="lbl">整體毛利率</div>
+            <div class="val" style="color:#2563eb">{yr_margin_pct:.1f}%</div>
+          </div>
+          <div class="profit-mini">
+            <div class="lbl">最佳月份</div>
+            <div class="val" style="color:#b45309">{best_mo}</div>
+          </div>
+          <div class="profit-mini">
+            <div class="lbl">最佳月毛利</div>
+            <div class="val">NT${best_mo_p:,.0f}</div>
+          </div>
+        </div>
+      </div>
+
       <div class="card">
+        <div class="card-hd">🏆 型號獲利排行（今年）</div>
         <div class="card-body">
-          <div style="display:flex;gap:24px;margin-bottom:16px">
-            <div style="text-align:center;flex:1;padding:14px;background:#f0fdfa;border-radius:10px">
-              <div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:6px">已售出平均在庫</div>
-              <div style="font-size:2em;font-weight:800;color:#0d9488">{avg_days_sold:.0f} <span style="font-size:.5em;font-weight:500">天</span></div>
-            </div>
-            <div style="text-align:center;flex:1;padding:14px;background:#fff7ed;border-radius:10px">
-              <div style="font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:6px">現有庫存平均等待</div>
-              <div style="font-size:2em;font-weight:800;color:#b45309">{avg_days_stock:.0f} <span style="font-size:.5em;font-weight:500">天</span></div>
-            </div>
-          </div>
-          <div class="chart-wrap"><canvas id="daysChart"></canvas></div>
+          {_bar_html}
         </div>
       </div>
+
       <div class="card">
-        <div class="card-body" style="padding:0">
-          <table class="mtable">
-            <thead><tr>
-              <th>品牌</th>
-              <th style="text-align:right">平均在庫天</th>
-              <th style="text-align:right">銷售台數</th>
-              <th style="text-align:right">毛利率</th>
-            </tr></thead>
-            <tbody>{brand_perf_rows}</tbody>
-          </table>
+        <div class="card-hd">🌐 平台獲利排行（今年）</div>
+        <div class="card-body">
+          {_platform_html}
         </div>
-      </div>
-    </div>
-
-    <div class="two-col">
-      <div>
-        <div class="sec-hd">
-          <div class="sec-title"><div class="sec-icon" style="background:#faf5ff">🏷</div>品牌銷售佔比</div>
-        </div>
-        <div class="card">
-          <div class="card-body">
-            <div class="chart-wrap"><canvas id="brandChart"></canvas></div>
-          </div>
-        </div>
-      </div>
-      <div>
-        <div class="sec-hd">
-          <div class="sec-title"><div class="sec-icon" style="background:#fff7ed">🏆</div>Top 10 熱銷型號</div>
-        </div>
-        <div class="card">
-          <div class="card-body">
-            <div class="chart-wrap"><canvas id="topChart"></canvas></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 排行榜 -->
-    <div class="sec-hd">
-      <div class="sec-title"><div class="sec-icon" style="background:#fef9c3">🏅</div>型號排行榜</div>
-      <div class="sec-desc">僅統計銷售 3 台以上型號 · 綜合分數 = 毛利率 40% + 週轉率 40% + 不滯銷 20%</div>
-    </div>
-    <div class="four-col">
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#16a34a;margin-bottom:8px;padding:0 4px">💰 毛利率排行</div>
-        <div class="card"><div class="card-body" style="padding:0">{tbl_margin}</div></div>
-      </div>
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#2563eb;margin-bottom:8px;padding:0 4px">🔄 週轉率排行</div>
-        <div class="card"><div class="card-body" style="padding:0">{tbl_turnover}</div></div>
-      </div>
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#dc2626;margin-bottom:8px;padding:0 4px">🐌 滯銷排行（庫存等待最久）</div>
-        <div class="card"><div class="card-body" style="padding:0">{tbl_stagnant}</div></div>
-      </div>
-      <div>
-        <div style="font-size:12px;font-weight:700;color:#7c3aed;margin-bottom:8px;padding:0 4px">⭐ 綜合排名</div>
-        <div class="card"><div class="card-body" style="padding:0">{tbl_composite}</div></div>
       </div>
     </div>
 
   </div>
-
-  <script>
-  new Chart(document.getElementById('monthChart'),{{
-    type:'bar',
-    data:{{
-      labels:{_json.dumps(month_labels,ensure_ascii=False)},
-      datasets:[
-        {{type:'bar',label:'銷售額',data:{_json.dumps(month_rev)},
-          backgroundColor:'#2563eb33',borderColor:'#2563eb',borderWidth:1.5,yAxisID:'y'}},
-        {{type:'bar',label:'毛利',data:{_json.dumps(month_profit)},
-          backgroundColor:'#16a34a33',borderColor:'#16a34a',borderWidth:1.5,yAxisID:'y'}},
-        {{type:'line',label:'毛利率%',data:{_json.dumps(month_margin)},
-          borderColor:'#ea580c',backgroundColor:'#ea580c22',
-          tension:.4,pointRadius:4,fill:false,yAxisID:'y2'}}
-      ]
-    }},
-    options:{{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{{
-        legend:{{position:'top',labels:{{font:{{size:11}},padding:12,color:'#4b5563'}}}},
-        tooltip:{{callbacks:{{
-          label:ctx=>ctx.dataset.yAxisID==='y2'
-            ?` ${{ctx.dataset.label}}: ${{ctx.raw}}%`
-            :` ${{ctx.dataset.label}}: NT$${{ctx.raw.toLocaleString()}}`
-        }}}}
-      }},
-      scales:{{
-        y:{{position:'left',ticks:{{callback:v=>'NT$'+v.toLocaleString(),font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
-        y2:{{position:'right',min:0,max:50,ticks:{{callback:v=>v+'%',font:{{size:10}},color:'#9ca3af'}},grid:{{drawOnChartArea:false}}}}
-      }}
-    }}
-  }});
-
-  new Chart(document.getElementById('daysChart'),{{
-    type:'bar',
-    data:{{
-      labels:{_json.dumps(brand_day_labels,ensure_ascii=False)},
-      datasets:[{{
-        label:'平均在庫天數',
-        data:{_json.dumps(brand_day_vals)},
-        backgroundColor:{_json.dumps(brand_day_labels)}.map((_,i)=>
-          {_json.dumps(brand_day_vals)}[i]<=7?'#0d948888':
-          {_json.dumps(brand_day_vals)}[i]<=14?'#ea580c88':'#dc262688'
-        ),
-        borderRadius:4
-      }}]
-    }},
-    options:{{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{{
-        legend:{{display:false}},
-        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.raw}} 天`}}}}
-      }},
-      scales:{{
-        x:{{ticks:{{font:{{size:10}},color:'#4b5563'}},grid:{{display:false}}}},
-        y:{{ticks:{{callback:v=>v+'天',font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}}
-      }}
-    }}
-  }});
-
-  new Chart(document.getElementById('brandChart'),{{
-    type:'doughnut',
-    data:{{
-      labels:{_json.dumps(brand_labels,ensure_ascii=False)},
-      datasets:[{{data:{_json.dumps(brand_vals)},
-        backgroundColor:{_json.dumps(brand_colors[:len(brand_labels)])},borderWidth:2}}]
-    }},
-    options:{{
-      responsive:true,maintainAspectRatio:false,
-      plugins:{{
-        legend:{{position:'right',labels:{{font:{{size:11}},padding:10,color:'#4b5563'}}}},
-        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.label}}: ${{ctx.raw}} 台`}}}}
-      }}
-    }}
-  }});
-
-  new Chart(document.getElementById('topChart'),{{
-    type:'bar',
-    data:{{
-      labels:{_json.dumps(top10_labels,ensure_ascii=False)},
-      datasets:[{{
-        label:'銷售台數',data:{_json.dumps(top10_vals)},
-        backgroundColor:{_json.dumps([c+'cc' for c in top10_colors[:len(top10_vals)]])},
-        borderRadius:4
-      }}]
-    }},
-    options:{{
-      indexAxis:'y',responsive:true,maintainAspectRatio:false,
-      plugins:{{
-        legend:{{display:false}},
-        tooltip:{{callbacks:{{label:ctx=>` ${{ctx.raw}} 台`}}}}
-      }},
-      scales:{{
-        x:{{ticks:{{font:{{size:10}},color:'#9ca3af'}},grid:{{color:'#f3f4f6'}}}},
-        y:{{ticks:{{font:{{size:10}},color:'#4b5563'}}}}
-      }}
-    }}
-  }});
-  </script>
 </body>
 </html>'''
     return html
