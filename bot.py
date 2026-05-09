@@ -2289,32 +2289,44 @@ def sales_dashboard():
                      'font-size:12px">尚無銷售資料</div>')
 
     # ── 銷售數量型號排行 HTML ─────────────────────────────────────
-    _qty_cols_left  = ['#2563eb','#3b82f6','#60a5fa','#93c5fd','#bfdbfe',
-                       '#dbeafe','#eff6ff','#e0f2fe']
-    _qty_cols_right = ['#7c3aed','#8b5cf6','#a78bfa','#c4b5fd','#ddd6fe',
-                       '#ede9fe','#f5f3ff','#faf5ff']
+    # 每個名次對應固定深色，全部可讀，不漸淡
+    _qty_rank_cols = [
+        '#ca8a04',  # 1  金
+        '#6b7280',  # 2  銀
+        '#b45309',  # 3  銅
+        '#2563eb',  # 4
+        '#2563eb',  # 5
+        '#2563eb',  # 6
+        '#2563eb',  # 7
+        '#2563eb',  # 8
+        '#7c3aed',  # 9
+        '#7c3aed',  # 10
+        '#7c3aed',  # 11
+        '#7c3aed',  # 12
+        '#7c3aed',  # 13
+        '#7c3aed',  # 14
+        '#7c3aed',  # 15
+    ]
     _qty_medals = ['🥇','🥈','🥉']
-    # 左右兩欄，各放一半
     _qty_left  = model_qty_top15[:8]
     _qty_right = model_qty_top15[8:]
 
-    def _qty_bar(i, m, q, col):
+    def _qty_bar(i, m, q):
         _w   = int(q / _max_mq * 100)
         _lbl = _qty_medals[i] if i < 3 else f'{i+1}.'
+        _col = _qty_rank_cols[i] if i < len(_qty_rank_cols) else '#2563eb'
         return (
             f'<div class="bar-item">'
             f'<div class="bar-header">'
-            f'<span class="bar-model">{_lbl} {m}</span>'
-            f'<span class="bar-val" style="color:{col}">{q} 台</span>'
+            f'<span class="bar-model" style="color:#1a1d23">{_lbl} {m}</span>'
+            f'<span class="bar-val" style="color:{_col}">{q} 台</span>'
             f'</div>'
-            f'<div class="bar-track"><div class="bar-fill" style="width:{_w}%;background:{col}"></div></div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{_w}%;background:{_col}"></div></div>'
             f'</div>'
         )
 
-    _qty_left_html  = ''.join(_qty_bar(i, m, q, _qty_cols_left[i % len(_qty_cols_left)])
-                               for i, (m, q) in enumerate(_qty_left))
-    _qty_right_html = ''.join(_qty_bar(i + len(_qty_left), m, q,
-                                        _qty_cols_right[i % len(_qty_cols_right)])
+    _qty_left_html  = ''.join(_qty_bar(i, m, q) for i, (m, q) in enumerate(_qty_left))
+    _qty_right_html = ''.join(_qty_bar(i + len(_qty_left), m, q)
                                for i, (m, q) in enumerate(_qty_right))
     if not _qty_left_html:
         _qty_left_html = '<div style="color:#9ca3af;font-size:12px;padding:12px">尚無銷售資料</div>'
