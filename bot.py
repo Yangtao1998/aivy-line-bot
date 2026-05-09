@@ -2198,28 +2198,50 @@ def sales_dashboard():
     _max_mp = model_profit_top10[0][1] if model_profit_top10 else 1
 
     # ── 危險庫存 HTML ─────────────────────────────────────────────
-    _crit_html = ''
-    for _x in critical_inv[:5]:
-        _d   = _x['days']
+    def _crit_item(x):
+        _d   = x['days']
         _cls = 'critical' if _d > 60 else 'warn'
-        _crit_html += (
+        return (
             f'<div class="stag-item">'
             f'<div class="stag-days {_cls}">{_d}<br>'
             f'<span style="font-size:9px;font-weight:500">天</span></div>'
             f'<div class="stag-info">'
-            f'<div class="stag-model">{_x["model"]}</div>'
-            f'<div class="stag-meta">{_x["number"]} · 入庫 {_x["date_str"]}</div>'
+            f'<div class="stag-model">{x["model"]}</div>'
+            f'<div class="stag-meta">{x["number"]} · 入庫 {x["date_str"]}</div>'
             f'</div>'
-            f'<div class="stag-cost">NT${_x["cost"]:,.0f}</div>'
+            f'<div class="stag-cost">NT${x["cost"]:,.0f}</div>'
             f'</div>'
         )
-    _crit_extra = _crit_count - 5
-    if _crit_extra > 0:
-        _crit_html += (f'<div style="text-align:center;padding:10px 0;font-size:11px;color:#9ca3af">'
-                       f'還有 {_crit_extra} 台未顯示</div>')
-    if not _crit_html:
+
+    _crit_html = ''
+    if not critical_inv:
         _crit_html = ('<div style="text-align:center;padding:24px;color:#16a34a;'
                       'font-size:13px;font-weight:600">✅ 目前沒有庫齡超過 30 天的庫存</div>')
+    else:
+        # 前 5 筆固定顯示
+        for _x in critical_inv[:5]:
+            _crit_html += _crit_item(_x)
+        # 第 6 筆以後收起來，按鈕展開
+        _crit_extra = _crit_count - 5
+        if _crit_extra > 0:
+            _hidden_html = ''.join(_crit_item(_x) for _x in critical_inv[5:])
+            _crit_html += (
+                f'<div id="crit-more" style="display:none">{_hidden_html}</div>'
+                f'<div style="text-align:center;padding:10px 0">'
+                f'<button id="crit-btn" onclick="'
+                f'var m=document.getElementById(\'crit-more\');'
+                f'var b=document.getElementById(\'crit-btn\');'
+                f'if(m.style.display===\'none\'){{'
+                f'm.style.display=\'block\';b.textContent=\'▲ 收起\';'
+                f'}}else{{'
+                f'm.style.display=\'none\';b.textContent=\'▼ 還有 {_crit_extra} 台 — 點擊展開\';'
+                f'}}" '
+                f'style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;'
+                f'padding:6px 18px;border-radius:8px;font-size:12px;font-weight:700;'
+                f'cursor:pointer;width:100%">'
+                f'▼ 還有 {_crit_extra} 台 — 點擊展開'
+                f'</button></div>'
+            )
 
     # ── 滯銷排行表格 HTML ──────────────────────────────────────────
     _stag_rows = ''
