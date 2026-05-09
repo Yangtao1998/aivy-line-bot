@@ -2110,11 +2110,21 @@ def sales_dashboard():
     _today_dt = _dt2.today()
 
     def _parse_inv_date(s):
+        """支援多種日期格式，包含 Google Sheets 繁中時區 export 常見格式"""
         s = s.strip()
         if not s: return None
-        for fmt in ('%Y-%m-%d %H:%M', '%Y-%m-%d', '%Y/%m/%d'):
+        # 完整格式（有或無秒）
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M', '%Y-%m-%d',
+                    '%Y/%m/%d %H:%M:%S', '%Y/%m/%d %H:%M', '%Y/%m/%d'):
             try: return _dt2.strptime(s, fmt)
             except: pass
+        # 有空格：先取日期部分再重試（如 "2026/5/9 上午 10:30:00"）
+        if ' ' in s:
+            date_part = s.split(' ')[0]
+            for fmt in ('%Y-%m-%d', '%Y/%m/%d'):
+                try: return _dt2.strptime(date_part, fmt)
+                except: pass
+        # M/D 短格式（如 "4/5" → 今年4月5日）
         p = s.split('/')
         if len(p) == 2:
             try: return _dt2(_today_dt.year, int(p[0]), int(p[1]))
@@ -2517,6 +2527,78 @@ def sales_dashboard():
 </body>
 </html>'''
     return html
+
+@app.route('/inv-debug', methods=['GET'])
+def inv_debug():
+    """診斷端點：顯示庫存表原始欄位資料，確認 col17 入庫時間格式"""
+    import csv, io, requests as _req
+    INV_SHEET_ID = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
+
+    def _fetch_rows(gid=None):
+        url = f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv'
+        if gid: url += f'&gid={gid}'
+        try:
+            r = _req.get(url, timeout=15)
+            r.encoding = 'utf-8-sig'
+            return list(csv.reader(io.StringIO(r.text))), None
+        except Exception as e:
+            return [], str(e)
+
+    ip_rows, ip_err = _fetch_rows()
+    an_rows, an_err = _fetch_rows('1739970295')
+
+    def _table(rows, label, col_id, col_status, col_date=17, col_model=3, col_cost=12):
+        html = f'<h2 style="margin:20px 0 8px;font-size:15px;color:#1a1d23">{label}</h2>'
+        if not rows:
+            return html + f'<p style="color:red">載入失敗：{ip_err or an_err}</p>'
+        # header row
+        html += f'<p style="font-size:11px;color:#9ca3af">總行數 {len(rows)}，表頭欄數 {len(rows[0])}</p>'
+        html += '<p style="font-size:11px;color:#6b7280;margin:4px 0 10px"><b>表頭（前25欄）：</b>'
+        html += ' | '.join(f'<span style="color:#2563eb">[{i}]</span>{v}' for i, v in enumerate(rows[0][:25]))
+        html += '</p>'
+        html += '<table style="border-collapse:collapse;font-size:12px;width:100%"><thead><tr>'
+        html += '<th style="background:#f3f4f6;padding:6px 10px;border:1px solid #e5e7eb">col_id</th>'
+        html += '<th style="background:#f3f4f6;padding:6px 10px;border:1px solid #e5e7eb">col_status</th>'
+        html += '<th style="background:#f3f4f6;padding:6px 10px;border:1px solid #e5e7eb">col_model</th>'
+        html += f'<th style="background:#fef9c3;padding:6px 10px;border:1px solid #e5e7eb">col{col_date} (入庫時間?)</th>'
+        html += '<th style="background:#f3f4f6;padding:6px 10px;border:1px solid #e5e7eb">col_cost</th>'
+        html += '<th style="background:#f3f4f6;padding:6px 10px;border:1px solid #e5e7eb">欄數</th>'
+        html += '</tr></thead><tbody>'
+        shown = 0
+        for r in rows[1:]:
+            if len(r) > col_id and r[col_id].strip().startswith('#'):
+                _dt_val = r[col_date].strip() if len(r) > col_date else '⚠️ col 不存在'
+                _st_val = r[col_status].strip() if len(r) > col_status else ''
+                _mo_val = r[col_model].strip() if len(r) > col_model else ''
+                _co_val = r[col_cost].strip() if len(r) > col_cost else ''
+                _id_val = r[col_id].strip()
+                _date_color = '#16a34a' if _dt_val and not _dt_val.startswith('⚠️') else '#dc2626'
+                html += (f'<tr>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb">{_id_val}</td>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb">{_st_val}</td>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb">{_mo_val}</td>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb;color:{_date_color};font-weight:700">{_dt_val or "（空白）"}</td>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb">{_co_val}</td>'
+                         f'<td style="padding:5px 10px;border:1px solid #e5e7eb">{len(r)}</td>'
+                         f'</tr>')
+                shown += 1
+                if shown >= 15: break
+        html += '</tbody></table>'
+        return html
+
+    body = _table(ip_rows, '📱 iPhone 庫存表（gid=default）', 0, 2, 17, 3, 12)
+    body += _table(an_rows, '🤖 Android 庫存表（gid=1739970295）', 2, 3, 17, 4, 12)
+
+    return f'''<!DOCTYPE html><html lang="zh-Hant"><head>
+<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>庫存診斷</title>
+<style>body{{font-family:system-ui,sans-serif;padding:20px;background:#f9fafb}}
+h1{{font-size:18px;margin-bottom:4px}}p.sub{{font-size:12px;color:#9ca3af}}</style>
+</head><body>
+<h1>🔍 庫存表診斷</h1>
+<p class="sub">確認 col17 是否有入庫時間，以及格式是否正確 · 黃色欄 = col17</p>
+{body}
+</body></html>'''
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
