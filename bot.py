@@ -2205,6 +2205,24 @@ def sales_dashboard():
     model_qty_top15 = sorted(_mod_qty.items(), key=lambda x: x[1], reverse=True)[:15]
     _max_mq = model_qty_top15[0][1] if model_qty_top15 else 1
 
+    # ── iPhone 平均售出天數排行（只計算 Apple 品牌，入庫日→銷售日）────
+    _spd_days  = defaultdict(list)   # model → [days, ...]
+    for _r in sold_all:
+        if _r[2] != 'Apple': continue          # 只 iPhone
+        _d_in  = _parse_inv_date(_r[1])        # 入庫日 (index 1)
+        _d_out = _parse_inv_date(_r[10])       # 銷售日 (index 10)
+        if _d_in and _d_out:
+            _days_val = max((_d_out - _d_in).days, 0)
+            _spd_days[_r[3].strip()].append(_days_val)
+    # 只保留至少賣過 3 台的型號，結果才有參考性
+    _spd_avg = {
+        m: sum(dl) / len(dl)
+        for m, dl in _spd_days.items() if len(dl) >= 3
+    }
+    # 由快到慢排序，取 TOP 15
+    speed_rank = sorted(_spd_avg.items(), key=lambda x: x[1])[:15]
+    _max_spd   = speed_rank[-1][1] if speed_rank else 1
+
     # ── 危險庫存 HTML ─────────────────────────────────────────────
     def _crit_item(x):
         _d   = x['days']
@@ -2332,6 +2350,45 @@ def sales_dashboard():
                                for i, (m, q) in enumerate(_qty_right))
     if not _qty_left_html:
         _qty_left_html = '<div style="color:#9ca3af;font-size:12px;padding:12px">尚無銷售資料</div>'
+
+    # ── iPhone 平均售出天數排行 HTML ──────────────────────────────────
+    _spd_medals = ['🥇','🥈','🥉']
+    _spd_left   = speed_rank[:8]
+    _spd_right  = speed_rank[8:]
+
+    def _spd_bar(i, m, avg_d):
+        _sold_cnt = len(_spd_days[m])
+        _w   = max(int(avg_d / _max_spd * 100), 4)
+        _lbl = _spd_medals[i] if i < 3 else f'{i+1}.'
+        # 顏色依天數：≤7天綠、≤14天藍、≤30天橙、>30天紅
+        if avg_d <= 7:    _col = '#16a34a'
+        elif avg_d <= 14: _col = '#2563eb'
+        elif avg_d <= 30: _col = '#ea580c'
+        else:             _col = '#dc2626'
+        return (
+            f'<div class="bar-item">'
+            f'<div class="bar-header">'
+            f'<span class="bar-model" style="color:#1a1d23">{_lbl} {m}</span>'
+            f'<span class="bar-val" style="color:{_col}">{avg_d:.1f} 天'
+            f'<span style="color:#9ca3af;font-size:10px;margin-left:4px">({_sold_cnt}台)</span></span>'
+            f'</div>'
+            f'<div class="bar-track"><div class="bar-fill" style="width:{_w}%;background:{_col}"></div></div>'
+            f'</div>'
+        )
+
+    _spd_left_html  = ''.join(_spd_bar(i, m, d) for i, (m, d) in enumerate(_spd_left))
+    _spd_right_html = ''.join(_spd_bar(i + len(_spd_left), m, d)
+                               for i, (m, d) in enumerate(_spd_right))
+    if _spd_left_html:
+        _speed_html = (
+            f'<div style="display:grid;grid-template-columns:1fr 1fr;gap:0 32px">'
+            f'<div>{_spd_left_html}</div>'
+            f'<div>{_spd_right_html}</div>'
+            f'</div>'
+        )
+    else:
+        _speed_html = ('<div style="text-align:center;padding:20px;color:#9ca3af;font-size:12px">'
+                       '尚無足夠資料（每個型號至少需賣出 3 台）</div>')
 
     # ── 銷貨渠道數量排行 HTML（從 sold_all col14 = 銷售渠道）────────
     _ch_qty = defaultdict(int)
@@ -2623,6 +2680,21 @@ def sales_dashboard():
             <div>{_qty_right_html}</div>
           </div>
         </div>
+      </div>
+    </div>
+
+    <!-- ════ 第五區：iPhone 平均售出天數排行 ════ -->
+    <div class="sec-hd" style="margin-top:32px">
+      <div class="sec-icon" style="background:#f0fdf4">⚡</div>
+      <div>
+        <div class="sec-title">iPhone 平均售出天數排行</div>
+        <div class="sec-sub">越快越好 · 至少賣出 3 台才列入 · 共 {len(speed_rank)} 個型號</div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:40px">
+      <div class="card-body">
+        {_speed_html}
       </div>
     </div>
 
