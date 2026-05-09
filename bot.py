@@ -1662,7 +1662,7 @@ def sales_dashboard():
                 銷售日    = row[7].strip()  if len(row) > 7  else ''
                 售價      = row[8].strip()  if len(row) > 8  else ''
                 利潤      = row[9].strip()  if len(row) > 9  else ''
-                銷售渠道  = row[12].strip() if len(row) > 12 else ''  # col12=銷貨渠道(無IMEI)
+                銷售渠道  = row[13].strip() if len(row) > 13 else ''  # col13=銷貨渠道(無IMEI同位置)
             月份 = ''
             for d in [銷售日, 入庫日]:
                 dt = _pd(d)
