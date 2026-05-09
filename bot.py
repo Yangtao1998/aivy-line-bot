@@ -1613,15 +1613,13 @@ def sales_dashboard():
     from collections import defaultdict
 
     # ── 年份 & 試算表對照 ──────────────────────────────────────────
-    YEAR_SHEETS = {
-        '115': '11Qr4pn4J5zGUtd2EPLXbi00FpWZ59LHI9KAn0yChxjg',
-        '114': '1-QJSBd_3kYyQ7r_-Dw_IRNCOKOW-l5lcqNuWn-1hXwk',
-        '113': '1OFvi4vDhLbK2zy5jSm3C43WsW6x_VEbq',
-    }
-    year_param = '115'
+    # 115年：Andy 的實際每日銷售紀錄（按月份分頁）
+    SHEET_ID_115  = '1T-1Hh94Ff2N1UOtlG29_4KupNLS9Mbxt7Q7w_7o0ddw'
+    GIDS_115      = [0, 1573910416, 154022399, 753188015, 198630429]  # 1-5月
+    year_param    = '115'
 
     def _parse_hist(rows, yr):
-        """解析 113/114年 按型號分組格式，轉成 115年 16欄標準格式"""
+        """解析按型號分組格式，自動偵測有無 IMEI 欄，轉成 16 欄標準格式"""
         from datetime import datetime as _dth
         ad_year = int(yr) + 1911
         def _pd(d):
@@ -1638,7 +1636,6 @@ def sales_dashboard():
         data, current_model = [], ''
         for row in rows[3:]:
             if len(row) < 8: continue
-            # 型號群組標題列（col0 有值且 col2 不是編號）
             if row[0].strip() and not row[2].strip().startswith('#'):
                 if row[0].strip() not in ('型號', ''):
                     current_model = row[0].strip()
@@ -1649,16 +1646,25 @@ def sales_dashboard():
             容量   = row[3].strip()
             顏色   = row[4].strip()
             收購   = row[5].strip()
-            備註   = row[6].strip()
-            銷售日 = row[7].strip() if len(row) > 7 else ''
-            售價   = row[8].strip() if len(row) > 8 else ''
-            利潤   = row[9].strip() if len(row) > 9 else ''
-            # 月份
+            # 自動偵測：col6 若為純數字且長度>8 → IMEI 欄（新格式）
+            c6 = row[6].strip() if len(row) > 6 else ''
+            has_imei = c6.isdigit() and len(c6) > 8
+            if has_imei:
+                imei   = c6
+                備註   = row[7].strip() if len(row) > 7 else ''
+                銷售日 = row[8].strip() if len(row) > 8 else ''
+                售價   = row[9].strip() if len(row) > 9 else ''
+                利潤   = row[10].strip() if len(row) > 10 else ''
+            else:
+                imei   = ''
+                備註   = c6
+                銷售日 = row[7].strip() if len(row) > 7 else ''
+                售價   = row[8].strip() if len(row) > 8 else ''
+                利潤   = row[9].strip() if len(row) > 9 else ''
             月份 = ''
             for d in [銷售日, 入庫日]:
                 dt = _pd(d)
                 if dt: 月份 = f'{dt.month}月'; break
-            # 品牌
             ml = current_model.lower()
             if any(x in ml for x in ('iphone','ipad','macbook','apple','airpod')): 品牌 = 'Apple'
             elif 'samsung' in ml: 品牌 = 'Samsung'
@@ -1669,30 +1675,26 @@ def sales_dashboard():
             elif any(x in ml for x in ('asus','華碩')):           品牌 = 'ASUS'
             elif 'realme' in ml: 品牌 = 'Realme'
             else: 品牌 = '其他'
-            # 狀態 & 毛利率
             狀態 = '已售出' if 銷售日 else '庫存中'
             try:
                 s_n = float(售價.replace('$','').replace(',','')) if 售價 else 0
                 p_n = float(利潤.replace('$','').replace(',','')) if 利潤 else 0
                 毛利率 = f'{p_n/s_n*100:.2f}' if s_n else '0'
             except: 毛利率 = '0'
-            # 正規化成 16 欄（月份/入庫/品牌/型號/編號/容量/顏色/收購/IMEI/備註/銷售日/售價/利潤/毛利率/客備/狀態）
             data.append([月份, 入庫日, 品牌, current_model, 編號, 容量, 顏色,
-                         收購, '', 備註, 銷售日, 售價, 利潤, 毛利率, '', 狀態])
+                         收購, imei, 備註, 銷售日, 售價, 利潤, 毛利率, '', 狀態])
         return data
 
-    # ── 讀取主資料庫 CSV（銷售紀錄）────────────────────────────────
+    # ── 讀取主資料庫 CSV（115年：合併所有月份分頁）──────────────────
     try:
         import requests as _req
-        SHEET_ID = YEAR_SHEETS[year_param]
-        CSV_URL = f'https://docs.google.com/spreadsheets/d/{SHEET_ID}/export?format=csv'
-        resp = _req.get(CSV_URL, timeout=15)
-        resp.encoding = 'utf-8-sig'
-        all_csv = list(csv.reader(io.StringIO(resp.text)))
-        if year_param == '115':
-            data_rows = [row for row in all_csv[1:] if len(row) >= 16]
-        else:
-            data_rows = _parse_hist(all_csv, year_param)
+        data_rows = []
+        for _gid in GIDS_115:
+            _url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID_115}/export?format=csv&gid={_gid}'
+            _r = _req.get(_url, timeout=15)
+            _r.encoding = 'utf-8-sig'
+            _tab = list(csv.reader(io.StringIO(_r.text)))
+            data_rows.extend(_parse_hist(_tab, year_param))
         data_ok = True
     except Exception as _e:
         logger.error(f'sales_dashboard CSV error: {_e}')
