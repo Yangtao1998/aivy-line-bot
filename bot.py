@@ -2206,9 +2206,22 @@ def sales_dashboard():
     _max_mq = model_qty_top15[0][1] if model_qty_top15 else 1
 
     # ── iPhone 平均售出天數排行（只計算 Apple 品牌，入庫日→銷售日）────
+    def _spd_exclude(model):
+        """排除指定系列：iPhone 7/8/17 系列"""
+        import re
+        m = model.strip().lower()
+        # 比對 iphone 後接的數字，排除 7x、8x、17x（含 Plus/Pro/Max 等後綴）
+        num = re.search(r'iphone\s*(\d+)', m)
+        if num:
+            n = int(num.group(1))
+            if n in (7, 8) or n >= 17:
+                return True
+        return False
+
     _spd_days  = defaultdict(list)   # model → [days, ...]
     for _r in sold_all:
         if _r[2] != 'Apple': continue          # 只 iPhone
+        if _spd_exclude(_r[3]): continue       # 排除 7/8/17 系列
         _d_in  = _parse_inv_date(_r[1])        # 入庫日 (index 1)
         _d_out = _parse_inv_date(_r[10])       # 銷售日 (index 10)
         if _d_in and _d_out:
