@@ -2544,7 +2544,7 @@ def sales_dashboard():
   <div class="header">
     <div class="logo"><em>艾薇</em>通訊 — 二手機庫存儀表板</div>
     <div class="badge"><div class="dot"></div>{year_param} 年度</div>
-    <div class="header-note">資料來源：Google Sheets · 每次開啟即時同步</div>
+    <div class="header-note">更新時間：{_today_dt.strftime('%Y/%m/%d %H:%M')}</div>
   </div>
 
   <div class="container">
