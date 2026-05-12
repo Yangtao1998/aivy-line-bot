@@ -1858,8 +1858,6 @@ def sales_dashboard():
     today_d      = _date.today()
     current_mo   = f'{today_d.month}月'
     range_param  = request.args.get('range', 'year')
-    # 日期選單：預設今天，可用 ?date=2026-05-10 指定查歷史
-    _date_param  = request.args.get('date', today_d.strftime('%Y-%m-%d'))
 
     sold_all  = [r for r in data_rows if r[15].strip() == '已售出']
     stock     = [r for r in data_rows if r[15].strip() != '已售出']
@@ -2284,32 +2282,20 @@ def sales_dashboard():
     )[:10]
 
     # ── 今日數據（銷售 / 回收）────────────────────────────────────
-    # 解析日期選單參數
-    try:
-        from datetime import datetime as _dtparse
-        _view_dt   = _dtparse.strptime(_date_param, '%Y-%m-%d')
-        _view_date = _view_dt.date()
-    except Exception:
-        _view_dt   = _today_dt
-        _view_date = _today_dt.date()
-
-    def _is_view_date(date_str):
+    def _is_today(date_str):
         try:
             dt = _parse_inv_date(date_str)
-            return dt is not None and dt.date() == _view_date
+            return dt is not None and dt.date() == _today_dt.date()
         except Exception:
             return False
 
-    _is_today_flag = (_view_date == _today_dt.date())
-    _today_label   = f'{_view_date.month}/{_view_date.day}'
-    _date_title    = '今日' if _is_today_flag else f'{_view_date.month}/{_view_date.day}'
-
-    # 銷售（來自銷售紀錄表）
-    _today_sold        = [r for r in sold_all if _is_view_date(r[10])]
+    # 今日銷售（來自銷售紀錄表）
+    _today_sold        = [r for r in sold_all if _is_today(r[10])]
     today_sale_qty     = len(_today_sold)
     today_sale_profit  = sum(num(r[12]) for r in _today_sold)
+    _today_label       = f'{_today_dt.month}/{_today_dt.day}'
 
-    # 回收（來自收購資料庫）
+    # 今日回收（來自收購資料庫，比銷售表更準確）
     PURCHASE_SHEET_ID = '1MV5D3etzguS59DYZuqiXQ7wRkopUxfVqM2ATwLWLoPs'
     try:
         import requests as _req2
@@ -2320,20 +2306,15 @@ def sales_dashboard():
         _pur_resp.encoding = 'utf-8-sig'
         import csv as _csv2, io as _io2
         _pur_rows = list(_csv2.reader(_io2.StringIO(_pur_resp.text)))[1:]  # 跳標題
-        # col0=日期時間(2026/05/12 格式), col11=單機價格
-        _view_slash      = _view_dt.strftime('%Y/%m/%d')
-        _cur_mo_slash    = _today_dt.strftime('%Y/%m')   # 本月前7碼
-        _pur_today       = [r for r in _pur_rows if len(r)>11 and r[0].strip()[:10]==_view_slash]
-        _pur_this_month  = [r for r in _pur_rows if len(r)>11 and r[0].strip()[:7]==_cur_mo_slash]
-        today_recycle_qty    = len(_pur_today)
-        today_recycle_cost   = sum(num(r[11]) for r in _pur_today)
-        monthly_recycle_qty  = len(_pur_this_month)
-        monthly_recycle_cost = sum(num(r[11]) for r in _pur_this_month)
+        # col0=日期時間, col11=單機價格
+        _today_date_slash = _today_dt.strftime('%Y/%m/%d')  # 格式如 2026/05/12
+        _pur_today = [r for r in _pur_rows
+                      if len(r) > 11 and r[0].strip()[:10] == _today_date_slash]
+        today_recycle_qty  = len(_pur_today)
+        today_recycle_cost = sum(num(r[11]) for r in _pur_today)
     except Exception:
-        today_recycle_qty    = 0
-        today_recycle_cost   = 0
-        monthly_recycle_qty  = 0
-        monthly_recycle_cost = 0
+        today_recycle_qty  = 0
+        today_recycle_cost = 0
 
     # ── Section 3：賺錢能力（永遠基於全年 sold_all）─────────────
     _cur_mo_sold  = [r for r in sold_all if r[0].strip() == current_mo]
@@ -2743,42 +2724,30 @@ def sales_dashboard():
     </div>
 
     <!-- 今日數據列 -->
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap">
-      <span style="font-size:13px;font-weight:700;color:#4b5563">{_date_title} 數據</span>
-      <form method="get" style="display:flex;align-items:center;gap:6px">
-        <input type="hidden" name="year" value="{year_param}">
-        <input type="hidden" name="range" value="{range_param}">
-        <input type="date" name="date" value="{_date_param}"
-               style="font-size:12px;padding:4px 8px;border:1px solid #d1d5db;border-radius:8px;
-                      color:#1a1d23;background:#fff;cursor:pointer"
-               onchange="this.form.submit()">
-        {'<a href="?year='+year_param+'&range='+range_param+'" style="font-size:11px;color:#6b7280;text-decoration:none;padding:4px 8px;border:1px solid #d1d5db;border-radius:8px">回今日</a>' if not _is_today_flag else ''}
-      </form>
-    </div>
     <div class="kpi-grid-4" style="margin-bottom:28px">
       <div class="kpi" style="--accent:#16a34a">
         <div class="kpi-icon" style="background:#f0fdf4">🛒</div>
-        <div class="kpi-label">{_date_title}銷售台數</div>
+        <div class="kpi-label">今日銷售台數</div>
         <div class="kpi-val" style="color:#16a34a">{today_sale_qty} <span style="font-size:.5em;font-weight:500">台</span></div>
         <div class="kpi-sub">{_today_label} 已成交</div>
       </div>
       <div class="kpi" style="--accent:#16a34a">
         <div class="kpi-icon" style="background:#f0fdf4">💰</div>
-        <div class="kpi-label">{_date_title}銷售利潤</div>
+        <div class="kpi-label">今日銷售利潤</div>
         <div class="kpi-val" style="color:#16a34a;font-size:1.15em">NT${today_sale_profit:,.0f}</div>
-        <div class="kpi-sub">毛利合計</div>
+        <div class="kpi-sub">今日毛利合計</div>
       </div>
       <div class="kpi" style="--accent:#7c3aed">
         <div class="kpi-icon" style="background:#faf5ff">📥</div>
-        <div class="kpi-label">{_date_title}回收台數</div>
+        <div class="kpi-label">今日回收台數</div>
         <div class="kpi-val" style="color:#7c3aed">{today_recycle_qty} <span style="font-size:.5em;font-weight:500">台</span></div>
         <div class="kpi-sub">{_today_label} 入庫</div>
       </div>
       <div class="kpi" style="--accent:#7c3aed">
         <div class="kpi-icon" style="background:#faf5ff">🏷️</div>
-        <div class="kpi-label">{_date_title}回收成本</div>
+        <div class="kpi-label">今日回收成本</div>
         <div class="kpi-val" style="color:#7c3aed;font-size:1.15em">NT${today_recycle_cost:,.0f}</div>
-        <div class="kpi-sub">收購金額</div>
+        <div class="kpi-sub">今日收購金額</div>
       </div>
     </div>
 
@@ -2869,41 +2838,6 @@ def sales_dashboard():
         <div class="card-body">
           {_platform_html}
         </div>
-      </div>
-    </div>
-
-    <!-- ════ 本月回收統計 ════ -->
-    <div class="sec-hd" style="margin-top:32px">
-      <div class="sec-icon" style="background:#faf5ff">📥</div>
-      <div>
-        <div class="sec-title">本月回收統計</div>
-        <div class="sec-sub">{current_mo} · 來自收購資料庫</div>
-      </div>
-    </div>
-    <div class="kpi-grid-4" style="margin-bottom:28px">
-      <div class="kpi" style="--accent:#7c3aed">
-        <div class="kpi-icon" style="background:#faf5ff">📱</div>
-        <div class="kpi-label">本月回收台數</div>
-        <div class="kpi-val" style="color:#7c3aed">{monthly_recycle_qty} <span style="font-size:.5em;font-weight:500">台</span></div>
-        <div class="kpi-sub">{current_mo} 累積入庫</div>
-      </div>
-      <div class="kpi" style="--accent:#7c3aed">
-        <div class="kpi-icon" style="background:#faf5ff">💸</div>
-        <div class="kpi-label">本月回收成本</div>
-        <div class="kpi-val" style="color:#7c3aed;font-size:1.15em">NT${monthly_recycle_cost:,.0f}</div>
-        <div class="kpi-sub">本月收購總金額</div>
-      </div>
-      <div class="kpi" style="--accent:#0d9488">
-        <div class="kpi-icon" style="background:#f0fdfa">📊</div>
-        <div class="kpi-label">平均每台回收價</div>
-        <div class="kpi-val" style="color:#0d9488;font-size:1.15em">NT${(monthly_recycle_cost/monthly_recycle_qty):,.0f if monthly_recycle_qty else 0}</div>
-        <div class="kpi-sub">本月均價</div>
-      </div>
-      <div class="kpi" style="--accent:#0d9488">
-        <div class="kpi-icon" style="background:#f0fdfa">🔁</div>
-        <div class="kpi-label">本月銷回比</div>
-        <div class="kpi-val" style="color:#0d9488">{(len(_cur_mo_sold)/monthly_recycle_qty*100):,.1f if monthly_recycle_qty else 0}<span style="font-size:.5em;font-weight:500">%</span></div>
-        <div class="kpi-sub">本月售出 {len(_cur_mo_sold)} / 回收 {monthly_recycle_qty}</div>
       </div>
     </div>
 
