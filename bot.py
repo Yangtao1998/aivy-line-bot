@@ -2289,13 +2289,32 @@ def sales_dashboard():
         except Exception:
             return False
 
+    # 今日銷售（來自銷售紀錄表）
     _today_sold        = [r for r in sold_all if _is_today(r[10])]
     today_sale_qty     = len(_today_sold)
     today_sale_profit  = sum(num(r[12]) for r in _today_sold)
-    _today_in          = [r for r in data_rows if _is_today(r[1])]
-    today_recycle_qty  = len(_today_in)
-    today_recycle_cost = sum(num(r[7]) for r in _today_in)
     _today_label       = f'{_today_dt.month}/{_today_dt.day}'
+
+    # 今日回收（來自收購資料庫，比銷售表更準確）
+    PURCHASE_SHEET_ID = '1MV5D3etzguS59DYZuqiXQ7wRkopUxfVqM2ATwLWLoPs'
+    try:
+        import requests as _req2
+        _pur_resp = _req2.get(
+            f'https://docs.google.com/spreadsheets/d/{PURCHASE_SHEET_ID}/export?format=csv',
+            timeout=10
+        )
+        _pur_resp.encoding = 'utf-8-sig'
+        import csv as _csv2, io as _io2
+        _pur_rows = list(_csv2.reader(_io2.StringIO(_pur_resp.text)))[1:]  # 跳標題
+        # col0=日期時間, col11=單機價格
+        _today_date_slash = _today_dt.strftime('%Y/%m/%d')  # 格式如 2026/05/12
+        _pur_today = [r for r in _pur_rows
+                      if len(r) > 11 and r[0].strip()[:10] == _today_date_slash]
+        today_recycle_qty  = len(_pur_today)
+        today_recycle_cost = sum(num(r[11]) for r in _pur_today)
+    except Exception:
+        today_recycle_qty  = 0
+        today_recycle_cost = 0
 
     # ── Section 3：賺錢能力（永遠基於全年 sold_all）─────────────
     _cur_mo_sold  = [r for r in sold_all if r[0].strip() == current_mo]
