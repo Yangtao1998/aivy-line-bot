@@ -2281,19 +2281,6 @@ def sales_dashboard():
         key=lambda x: x['avg_days'], reverse=True
     )[:10]
 
-    # ── 今日數據（銷售 / 回收）────────────────────────────────────
-    _today_str = _today_dt.strftime('%Y-%m-%d')
-    # 今日銷售：sold_all 中 銷售日(index 10) == 今天
-    _today_sold = [r for r in sold_all
-                   if (_parse_inv_date(r[10]) or _today_dt.replace(year=1900)).strftime('%Y-%m-%d') == _today_str]
-    today_sale_qty    = len(_today_sold)
-    today_sale_profit = sum(num(r[12]) for r in _today_sold)
-    # 今日回收：data_rows 中 入庫日(index 1) == 今天（含尚未售出）
-    _today_in = [r for r in data_rows
-                 if (_parse_inv_date(r[1]) or _today_dt.replace(year=1900)).strftime('%Y-%m-%d') == _today_str]
-    today_recycle_qty  = len(_today_in)
-    today_recycle_cost = sum(num(r[7]) for r in _today_in)   # 收購成本 index 7
-
     # ── Section 3：賺錢能力（永遠基於全年 sold_all）─────────────
     _cur_mo_sold  = [r for r in sold_all if r[0].strip() == current_mo]
     cur_mo_profit = sum(num(r[12]) for r in _cur_mo_sold)
@@ -2698,34 +2685,6 @@ def sales_dashboard():
         <div class="kpi-label">整體周轉率</div>
         <div class="kpi-val" style="color:{_tr_color}">{turnover_rate:.1f}<span style="font-size:.5em;font-weight:500">%</span></div>
         <div class="kpi-sub">{_tr_status} · 已售 {len(sold_all):,} / 總入庫 {len(sold_all) + inv_total_qty:,}</div>
-      </div>
-    </div>
-
-    <!-- 今日數據 -->
-    <div class="kpi-grid-4" style="margin-bottom:28px">
-      <div class="kpi" style="--accent:#16a34a">
-        <div class="kpi-icon" style="background:#f0fdf4">🛒</div>
-        <div class="kpi-label">今日銷售台數</div>
-        <div class="kpi-val" style="color:#16a34a">{today_sale_qty} <span style="font-size:.5em;font-weight:500">台</span></div>
-        <div class="kpi-sub">{_today_dt.strftime('%-m/%-d')} 已成交</div>
-      </div>
-      <div class="kpi" style="--accent:#16a34a">
-        <div class="kpi-icon" style="background:#f0fdf4">💰</div>
-        <div class="kpi-label">今日銷售利潤</div>
-        <div class="kpi-val" style="color:#16a34a;font-size:1.2em">NT${today_sale_profit:,.0f}</div>
-        <div class="kpi-sub">今日毛利合計</div>
-      </div>
-      <div class="kpi" style="--accent:#7c3aed">
-        <div class="kpi-icon" style="background:#faf5ff">📥</div>
-        <div class="kpi-label">今日回收台數</div>
-        <div class="kpi-val" style="color:#7c3aed">{today_recycle_qty} <span style="font-size:.5em;font-weight:500">台</span></div>
-        <div class="kpi-sub">{_today_dt.strftime('%-m/%-d')} 入庫</div>
-      </div>
-      <div class="kpi" style="--accent:#7c3aed">
-        <div class="kpi-icon" style="background:#faf5ff">🏷️</div>
-        <div class="kpi-label">今日回收成本</div>
-        <div class="kpi-val" style="color:#7c3aed;font-size:1.2em">NT${today_recycle_cost:,.0f}</div>
-        <div class="kpi-sub">今日收購金額</div>
       </div>
     </div>
 
