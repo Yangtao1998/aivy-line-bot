@@ -1861,8 +1861,8 @@ def sales_dashboard():
 
     # 庫存資料
     if year_param == '115':
-        # 在庫狀態：「在庫」「租借」「維修」都算在庫存內
-        _INV_STATUSES = {'在庫', '租借', '維修'}
+        # 在庫狀態：「在庫」「維修」算庫存，「租借」不計
+        _INV_STATUSES = {'在庫', '維修'}
         try:
             _inv_text = _fetched.get(_inv_urls[0], '')
             inv_csv   = list(csv.reader(io.StringIO(_inv_text)))
