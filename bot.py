@@ -2382,8 +2382,30 @@ def sales_dashboard():
         monthly_recycle_cost = 0
 
     # 預先算好，避免 f-string 格式碼問題
-    _monthly_avg_price  = monthly_recycle_cost / monthly_recycle_qty if monthly_recycle_qty else 0
     _monthly_sales_rate = len([r for r in sold_all if r[0].strip() == current_mo]) / monthly_recycle_qty * 100 if monthly_recycle_qty else 0
+
+    # 本月回收來源分佈（col23 = 通路來源）
+    from collections import Counter as _Counter
+    _src_counter = _Counter(r[23].strip() for r in _pur_this_month if len(r) > 23 and r[23].strip())
+    _src_total   = sum(_src_counter.values())
+    _src_colors  = {'門市客戶':'#2563eb','同行':'#16a34a','官方line':'#7c3aed','朋友介紹':'#ea580c','其他':'#6b7280'}
+    _src_html    = ''
+    for _src, _cnt in _src_counter.most_common():
+        _pct = _cnt / _src_total * 100 if _src_total else 0
+        _col = _src_colors.get(_src, '#6b7280')
+        _src_html += (
+            f'<div style="margin-bottom:7px">'
+            f'<div style="display:flex;justify-content:space-between;font-size:11px;margin-bottom:3px">'
+            f'<span style="font-weight:600;color:#1a1d23">{_src}</span>'
+            f'<span style="color:{_col};font-weight:700">{_cnt}台 {_pct:.0f}%</span>'
+            f'</div>'
+            f'<div style="height:6px;background:#f1f5f9;border-radius:3px;overflow:hidden">'
+            f'<div style="width:{_pct:.1f}%;height:100%;background:{_col};border-radius:3px"></div>'
+            f'</div>'
+            f'</div>'
+        )
+    if not _src_html:
+        _src_html = '<div style="color:#9ca3af;font-size:11px;text-align:center;padding:8px">尚無來源資料</div>'
 
     # ── Section 3：賺錢能力（永遠基於全年 sold_all）─────────────
     _cur_mo_sold  = [r for r in sold_all if r[0].strip() == current_mo]
@@ -2946,11 +2968,10 @@ def sales_dashboard():
         <div class="kpi-val" style="color:#7c3aed;font-size:1.15em">NT${monthly_recycle_cost:,.0f}</div>
         <div class="kpi-sub">本月收購總金額</div>
       </div>
-      <div class="kpi" style="--accent:#0d9488">
-        <div class="kpi-icon" style="background:#f0fdfa">📊</div>
-        <div class="kpi-label">平均每台回收價</div>
-        <div class="kpi-val" style="color:#0d9488;font-size:1.15em">NT${_monthly_avg_price:,.0f}</div>
-        <div class="kpi-sub">本月均價</div>
+      <div class="kpi" style="--accent:#2563eb;grid-column:span 1">
+        <div class="kpi-icon" style="background:#eff6ff">🔍</div>
+        <div class="kpi-label">回收來源比例</div>
+        <div style="margin-top:10px">{_src_html}</div>
       </div>
       <div class="kpi" style="--accent:#0d9488">
         <div class="kpi-icon" style="background:#f0fdfa">🔁</div>
