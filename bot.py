@@ -1748,9 +1748,9 @@ def sales_dashboard():
             容量   = row[3].strip()
             顏色   = row[4].strip()
             收購   = row[5].strip()
-            # 自動偵測：col6 若為純數字且長度>8 → IMEI 欄（新格式）
+            # 自動偵測：col6 有內容且為純 ASCII 英數字（IMEI 或 iPad/Mac 序號）→ 有識別碼欄
             c6 = row[6].strip() if len(row) > 6 else ''
-            has_imei = c6.isdigit() and len(c6) > 8
+            has_imei = bool(c6) and c6.isascii() and c6.replace('-','').isalnum() and len(c6) >= 5
             if has_imei:
                 imei      = c6
                 備註      = row[7].strip()  if len(row) > 7  else ''
