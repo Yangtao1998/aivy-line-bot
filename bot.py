@@ -1827,6 +1827,11 @@ def sales_dashboard():
                          收購, imei, 備註, 銷售日, 售價, 利潤, 毛利率, 銷售渠道, 狀態])
         return data
 
+    # 強制清除快取（?refresh=1）
+    if request.args.get('refresh') == '1':
+        with _CSV_CACHE_LOCK:
+            _CSV_CACHE.clear()
+
     # ── 平行抓取所有試算表（快取 5 分鐘）────────────────────────────
     INV_SHEET_ID  = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
     _sale_urls = [
@@ -1856,11 +1861,14 @@ def sales_dashboard():
 
     # 庫存資料
     if year_param == '115':
+        # 在庫狀態：「在庫」「租借」「維修」都算在庫存內
+        _INV_STATUSES = {'在庫', '租借', '維修'}
         try:
             _inv_text = _fetched.get(_inv_urls[0], '')
             inv_csv   = list(csv.reader(io.StringIO(_inv_text)))
             inv_rows  = [r for r in inv_csv[1:]
-                         if len(r) >= 13 and r[0].strip().startswith('#') and r[2].strip() == '在庫']
+                         if len(r) >= 13 and r[0].strip().startswith('#')
+                         and r[2].strip() in _INV_STATUSES]
             inv_ok = bool(inv_rows)
         except Exception as _e:
             logger.error(f'inventory CSV error: {_e}')
@@ -1871,7 +1879,7 @@ def sales_dashboard():
             android_csv  = list(csv.reader(io.StringIO(_and_text)))
             android_rows = [r for r in android_csv[1:]
                             if len(r) >= 13 and r[2].strip().startswith('#')
-                            and r[3].strip() == '在庫' and r[4].strip()]
+                            and r[3].strip() in _INV_STATUSES and r[4].strip()]
             android_ok = bool(android_rows)
         except Exception as _e:
             logger.error(f'android CSV error: {_e}')
@@ -2738,7 +2746,11 @@ def sales_dashboard():
   <div class="header">
     <div class="logo"><em>艾薇</em>通訊 — 二手機庫存儀表板</div>
     <div class="badge"><div class="dot"></div>{year_param} 年度</div>
-    <div class="header-note">更新時間：{_today_dt.strftime('%Y/%m/%d %H:%M')}</div>
+    <div class="header-note" style="display:flex;align-items:center;gap:10px">
+      <span>更新時間：{_today_dt.strftime('%Y/%m/%d %H:%M')}</span>
+      <a href="?year={year_param}&range={range_param}&refresh=1"
+         style="font-size:11px;padding:3px 10px;background:#eff6ff;color:#2563eb;border:1px solid #bfdbfe;border-radius:20px;text-decoration:none;white-space:nowrap">↺ 強制更新資料</a>
+    </div>
   </div>
 
   <div class="container">
