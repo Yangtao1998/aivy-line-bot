@@ -651,6 +651,11 @@ def is_morning_window():
     # 深夜提前登記視窗：00:00 ~ 08:59（跨日後至上班前）
     if 0 <= now.hour <= 8:
         return True
+    # ⬇ 重啟補救：09:00~10:59 時 state 遺失，自動補標並開窗
+    if 9 <= now.hour <= 10:
+        m['sent'] = True
+        save_state(state)
+        return True
     return False
 
 def is_prenoon_presubmit():
@@ -708,10 +713,20 @@ def mark_evening_summary_sent_by_key(date_key):
     save_state(state)
 
 def is_evening_window():
+    now = now_taipei()
     state = load_state()
     state, today = ensure_today(state)
     e = state[today]['evening']
-    return e['sent'] and not e['summary_sent']
+    if e['summary_sent']:
+        return False
+    if e['sent']:
+        return True
+    # ⬇ 重啟補救：21:00~23:59 時 state 遺失，自動補標並開窗
+    if 21 <= now.hour <= 23:
+        e['sent'] = True
+        save_state(state)
+        return True
+    return False
 
 def get_unreported_evening():
     state = load_state()
