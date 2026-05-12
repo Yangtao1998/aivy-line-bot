@@ -831,13 +831,13 @@ def send_morning_prompt():
         carry = ''
         if yesterday_inc:
             lines = ['⚠️ 昨日未完成項目（請列入今日追蹤）：']
-            for mgr in MANAGERS:
+            for mgr in ALL_MEMBERS:
                 for item in yesterday_inc.get(mgr, []):
                     lines.append(f"  • {mgr}：{item}")
             carry = '\n'.join(lines) + '\n\n'
 
         push(TextMessage(
-            text=f"☀️ 早安！請各主管直接在群組輸入今日待辦事項\n\n"
+            text=f"☀️ 早安！請各位直接在群組輸入今日待辦事項\n\n"
                  f"{carry}"
                  "格式範例：\n1. 盤點配件庫存\n2. 同步官網庫存\n3. 整理展示機台\n\n"
                  "11:00 將自動彙整今日待辦 📋"
@@ -876,7 +876,7 @@ def send_evening_prompt():
     try:
         mark_evening_sent()
         push(TextMessage(
-            text="🌙 請各主管直接在群組輸入今日完成狀況\n\n"
+            text="🌙 請各位直接在群組輸入今日完成狀況\n\n"
                  "格式範例：\n✅ 盤點配件庫存\n✅ 同步官網庫存\n❌ 整理展示機台（客人太多）\n\n"
                  "00:00 將自動彙整完成狀況 📋"
         ))
