@@ -2912,6 +2912,142 @@ def handle_join(event):
           f"21:00 完成回報 → 23:00 提醒 → 00:00 彙整晚報\n\n"
           f"📋 Group ID：{group_id}")
 
+# ── 個人查詢 ─────────────────────────────────────────────────
+QUERY_KEYWORDS = ('我的紀錄', '我的记录', '查詢', '查询', '我的完成率', '個人紀錄', '個人記錄')
+
+def get_personal_stats(manager, days=7):
+    """查詢個人近 days 天的回報資料"""
+    if not supabase_client:
+        return []
+    since = (date.today() - timedelta(days=days - 1)).isoformat()
+    try:
+        res = supabase_client.table('daily_reports')\
+            .select('report_date,session,item_text,status,reason')\
+            .eq('manager', manager)\
+            .gte('report_date', since)\
+            .order('report_date', desc=True).execute()
+        return res.data or []
+    except Exception as e:
+        logger.error(f'個人查詢失敗：{e}')
+        return []
+
+def build_personal_stats_flex(manager, rows):
+    """把個人資料組成 Flex Message"""
+    today_str = date.today().isoformat()
+
+    # ── 完成率計算 ───────────────────────────────────────────
+    eve = [r for r in rows if r['session'] == 'evening'
+           and r['status'] in ('done', 'incomplete')]
+    done_cnt  = sum(1 for r in eve if r['status'] == 'done')
+    total_cnt = len(eve)
+    rate = round(done_cnt / total_cnt * 100) if total_cnt else 0
+    rate_color = '#16a34a' if rate >= 80 else '#ea580c' if rate >= 60 else '#dc2626'
+    bar_w = rate
+
+    # ── 連續回報天數 ─────────────────────────────────────────
+    reported_dates = {r['report_date'] for r in rows
+                      if r['session'] == 'evening'
+                      and r['status'] in ('done', 'incomplete')}
+    streak, check = 0, date.today() - timedelta(days=1)
+    for _ in range(14):
+        if check.isoformat() in reported_dates:
+            streak += 1; check -= timedelta(days=1)
+        else:
+            break
+    streak_label = f'{streak} 天 🔥' if streak >= 5 else \
+                   f'{streak} 天 ✨' if streak >= 3 else f'{streak} 天'
+
+    # ── 今日待辦 ─────────────────────────────────────────────
+    today_items = [r for r in rows if r['report_date'] == today_str
+                   and r['session'] == 'morning' and r['status'] == 'reported']
+
+    # ── 近期未完成（最多 3 筆）──────────────────────────────
+    incomplete = [r for r in rows if r['session'] == 'evening'
+                  and r['status'] == 'incomplete'][:3]
+
+    # ── 組裝 Flex ────────────────────────────────────────────
+    contents = []
+
+    # 完成率數字
+    contents.append({
+        "type": "box", "layout": "horizontal", "margin": "none",
+        "contents": [
+            {"type": "text", "text": f"{rate}%",
+             "size": "3xl", "weight": "bold", "color": rate_color, "flex": 0},
+            {"type": "box", "layout": "vertical", "flex": 1, "margin": "md",
+             "justifyContent": "center",
+             "contents": [
+                 {"type": "text", "text": f"{done_cnt}/{total_cnt} 件完成（近 7 天）",
+                  "size": "xs", "color": "#666666"},
+                 {"type": "text", "text": f"連續回報：{streak_label}",
+                  "size": "xs", "color": "#888888", "margin": "xs"},
+             ]}
+        ]
+    })
+    # 進度條
+    contents.append({
+        "type": "box", "layout": "vertical", "margin": "sm",
+        "contents": [{
+            "type": "box", "layout": "vertical",
+            "height": "6px", "backgroundColor": "#f3f4f6", "cornerRadius": "xxl",
+            "contents": [{
+                "type": "box", "layout": "vertical",
+                "height": "6px", "backgroundColor": rate_color,
+                "cornerRadius": "xxl", "width": f"{bar_w}%",
+                "contents": []
+            }]
+        }]
+    })
+    contents.append({"type": "separator", "margin": "md"})
+
+    # 今日待辦
+    if today_items:
+        contents.append({"type": "text", "text": "📋 今日待辦",
+                         "weight": "bold", "size": "sm", "margin": "md"})
+        for r in today_items[:5]:
+            tag = ' 🔁' if (r.get('reason', '') or '').startswith('結轉×') else ''
+            contents.append({"type": "text", "text": f"  • {r['item_text']}{tag}",
+                             "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
+        contents.append({"type": "separator", "margin": "md"})
+
+    # 近期未完成
+    if incomplete:
+        contents.append({"type": "text", "text": "❌ 近期未完成",
+                         "weight": "bold", "size": "sm", "margin": "md"})
+        for r in incomplete:
+            rsn = f'（{r["reason"]}）' if r.get('reason') else ''
+            contents.append({
+                "type": "box", "layout": "horizontal", "margin": "xs",
+                "contents": [
+                    {"type": "text", "text": r['report_date'][5:],
+                     "size": "xs", "color": "#9ca3af", "flex": 0, "margin": "none"},
+                    {"type": "text", "text": f" {r['item_text']}{rsn}",
+                     "size": "xs", "color": "#555555", "wrap": True, "flex": 1},
+                ]
+            })
+    else:
+        contents.append({"type": "text",
+                         "text": "🎉 近期沒有未完成紀錄！",
+                         "size": "sm", "color": "#16a34a", "margin": "md"})
+
+    bubble = {
+        "type": "bubble", "size": "kilo",
+        "header": {
+            "type": "box", "layout": "vertical",
+            "backgroundColor": "#1a1d23", "paddingAll": "lg",
+            "contents": [
+                {"type": "text", "text": f"👤 {manager} 的個人紀錄",
+                 "weight": "bold", "size": "md", "color": "#ffffff"},
+                {"type": "text", "text": f"近 7 天　{today_str}",
+                 "size": "xs", "color": "#9ca3af", "margin": "xs"},
+            ]
+        },
+        "body": {"type": "box", "layout": "vertical",
+                 "paddingAll": "lg", "spacing": "none", "contents": contents}
+    }
+    return FlexMessage(alt_text=f"{manager} 的個人紀錄",
+                       contents=FlexContainer.from_dict(bubble))
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text(event):
     group_id = getattr(event.source, 'group_id', None)
@@ -2934,6 +3070,15 @@ def handle_text(event):
 
     manager = get_manager_for_user(user_id)
     if not manager:
+        return
+
+    # 個人查詢
+    if text in QUERY_KEYWORDS:
+        rows = get_personal_stats(manager)
+        try:
+            reply(event.reply_token, build_personal_stats_flex(manager, rows))
+        except Exception as e:
+            logger.error(f'個人查詢回覆失敗：{e}')
         return
 
     # 早晨收集視窗（含深夜 00:00~08:59 提前登記）
