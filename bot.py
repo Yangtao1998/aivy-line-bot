@@ -861,6 +861,12 @@ def reply(reply_token, text):
 
 # ── 排程任務 ─────────────────────────────────────────────────
 def send_morning_prompt():
+    # 冪等保護：已發送就跳過（防止 Render 部署時新舊 instance 雙重觸發）
+    state = load_state()
+    state, today = ensure_today(state)
+    if state[today]['morning']['sent']:
+        logger.warning('send_morning_prompt 重複觸發，略過')
+        return
     logger.info('發送早晨待辦回報提示')
     try:
         mark_morning_sent()
@@ -894,6 +900,12 @@ def send_morning_reminder():
         logger.error(f'早晨提醒失敗：{e}')
 
 def send_morning_summary():
+    # 冪等保護：已發送就跳過
+    state = load_state()
+    state, _today = ensure_today(state)
+    if state[_today]['morning']['summary_sent']:
+        logger.warning('send_morning_summary 重複觸發，略過')
+        return
     todos = get_morning_todos()
     today = today_key()
     # 取得需要自動結轉的昨日未完成任務
@@ -910,6 +922,12 @@ def send_morning_summary():
         logger.error(f'早晨彙整卡失敗：{e}')
 
 def send_evening_prompt():
+    # 冪等保護：已發送就跳過（防止 Render 部署時新舊 instance 雙重觸發）
+    state = load_state()
+    state, today = ensure_today(state)
+    if state[today]['evening']['sent']:
+        logger.warning('send_evening_prompt 重複觸發，略過')
+        return
     logger.info('發送晚間完成狀況回報提示')
     try:
         mark_evening_sent()
