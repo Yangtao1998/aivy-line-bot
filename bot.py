@@ -37,7 +37,14 @@ configuration = Configuration(access_token=LINE_CHANNEL_ACCESS_TOKEN)
 handler       = WebhookHandler(LINE_CHANNEL_SECRET)
 
 TZ         = pytz.timezone('Asia/Taipei')
-MANAGERS   = ['Andy', '小陳', 'Hank', '小楊']
+MANAGERS   = ['Andy', '小陳', 'Hank', '小楊']   # 管理層（用於 KPI、趨勢圖）
+DEPARTMENTS = {                                   # 部門 → 主管 + 員工
+    '門市': {'manager': '小陳', 'color': '#E53935', 'members': ['英英']},
+    '維修': {'manager': 'Hank',  'color': '#16a34a', 'members': ['小杰']},
+    '印尼': {'manager': '小楊', 'color': '#ea580c', 'members': ['Jordan']},
+}
+DEPT_MEMBERS = [m for d in DEPARTMENTS.values() for m in d['members']]
+ALL_MEMBERS  = MANAGERS + DEPT_MEMBERS            # 全員（用於資料收集）
 STATE_FILE = 'state.json'
 
 # ── Supabase ─────────────────────────────────────────────────
@@ -370,7 +377,7 @@ def check_missing_reports():
             missing_dates[row['manager']].add(row['report_date'])
 
         alerts = []
-        for manager in MANAGERS:
+        for manager in ALL_MEMBERS:
             consecutive = 0
             check = today - timedelta(days=1)
             for _ in range(4):
@@ -542,8 +549,15 @@ def ensure_today(state):
 
 # ── 使用者身份對應 ────────────────────────────────────────────
 STATIC_USER_MAP = {}
-for _mgr, _env in [('Andy', 'LINE_USER_ANDY'), ('小陳', 'LINE_USER_XIAOCHEN'),
-                    ('Hank', 'LINE_USER_HANK'), ('小楊', 'LINE_USER_XIAOYANG')]:
+for _mgr, _env in [
+    ('Andy',   'LINE_USER_ANDY'),
+    ('小陳',   'LINE_USER_XIAOCHEN'),
+    ('Hank',   'LINE_USER_HANK'),
+    ('小楊',   'LINE_USER_XIAOYANG'),
+    ('英英',   'LINE_USER_YINGYING'),
+    ('小杰',   'LINE_USER_XIAOJIE'),
+    ('Jordan', 'LINE_USER_JORDAN'),
+]:
     _uid = os.environ.get(_env, '').strip()
     if _uid:
         STATIC_USER_MAP[_uid] = _mgr
@@ -613,7 +627,7 @@ def get_unreported_morning():
     state, today = ensure_today(state)
     if not state[today]['morning']['sent']:
         return []
-    return [m for m in MANAGERS if m not in state[today]['morning']['todos']]
+    return [m for m in ALL_MEMBERS if m not in state[today]['morning']['todos']]
 
 # ── 晚間狀態 ─────────────────────────────────────────────────
 def mark_evening_sent():
@@ -666,7 +680,7 @@ def get_unreported_evening():
     state, today = ensure_today(state)
     if not state[today]['evening']['sent']:
         return []
-    return [m for m in MANAGERS if m not in state[today]['evening']['reports']]
+    return [m for m in ALL_MEMBERS if m not in state[today]['evening']['reports']]
 
 # ── Flex Message 建立 ────────────────────────────────────────
 def build_morning_summary_flex(todos, carryover=None):
@@ -674,28 +688,55 @@ def build_morning_summary_flex(todos, carryover=None):
     today = today_key()
     carryover = carryover or {}
     rows = []
-    for mgr in MANAGERS:
-        has_todo = mgr in todos
+
+    def _mgr_rows(mgr):
+        has_todo  = mgr in todos
         has_carry = mgr in carryover
         if has_todo or has_carry:
             rows.append({"type": "text", "text": f"✅  {mgr}",
                          "weight": "bold", "size": "sm", "color": "#06C755"})
-            # 一般待辦
             if has_todo:
                 for line in todos[mgr].strip().split('\n'):
                     if line.strip():
                         rows.append({"type": "text", "text": f"    {line.strip()}",
                                      "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
-            # 結轉任務
             if has_carry:
                 for item_text, count in carryover[mgr]:
-                    label = f"    🔁 {item_text}（結轉×{count}）"
-                    rows.append({"type": "text", "text": label,
+                    rows.append({"type": "text", "text": f"    🔁 {item_text}（結轉×{count}）",
                                  "size": "sm", "color": "#7C3AED", "wrap": True, "margin": "xs"})
         else:
             rows.append({"type": "text", "text": f"❌  {mgr} 尚未回報",
                          "weight": "bold", "size": "sm", "color": "#BBBBBB"})
         rows.append({"type": "separator", "margin": "md"})
+
+    # ── 管理層 ─────────────────────────────────────────────────
+    rows.append({"type": "text", "text": "▌ 管理層",
+                 "weight": "bold", "size": "xs", "color": "#2563eb", "margin": "none"})
+    rows.append({"type": "separator", "margin": "sm"})
+    for mgr in MANAGERS:
+        _mgr_rows(mgr)
+
+    # ── 各部門員工 ─────────────────────────────────────────────
+    if DEPT_MEMBERS:
+        rows.append({"type": "text", "text": "▌ 員工",
+                     "weight": "bold", "size": "xs", "color": "#ea580c", "margin": "md"})
+        rows.append({"type": "separator", "margin": "sm"})
+        for dept_name, dept in DEPARTMENTS.items():
+            for member in dept['members']:
+                rows.append({"type": "text",
+                             "text": f"[{dept_name}] {member}",
+                             "weight": "bold", "size": "xs", "color": "#666666", "margin": "sm"})
+                has_todo = member in todos
+                if has_todo:
+                    for line in todos[member].strip().split('\n'):
+                        if line.strip():
+                            rows.append({"type": "text", "text": f"    {line.strip()}",
+                                         "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
+                else:
+                    rows.append({"type": "text", "text": "    ⏳ 尚未回報",
+                                 "size": "sm", "color": "#BBBBBB", "margin": "xs"})
+                rows.append({"type": "separator", "margin": "md"})
+
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
 
@@ -716,21 +757,39 @@ def build_morning_summary_flex(todos, carryover=None):
 def build_evening_summary_flex(reports, report_date=None):
     today = report_date or today_key()
     rows = []
-    for mgr in MANAGERS:
-        if mgr in reports:
-            rows.append({"type": "text", "text": mgr,
-                         "weight": "bold", "size": "sm"})
-            for line in reports[mgr].strip().split('\n'):
+
+    def _eve_rows(name, label=None):
+        display = label or name
+        if name in reports:
+            rows.append({"type": "text", "text": display, "weight": "bold", "size": "sm"})
+            for line in reports[name].strip().split('\n'):
                 if line.strip():
-                    color = "#1AAE1A" if line.strip().startswith('✅') else \
-                            "#E53935" if line.strip().startswith('❌') else "#444444"
+                    color = "#16a34a" if '✅' in line else \
+                            "#dc2626" if '❌' in line else "#444444"
                     rows.append({"type": "text", "text": f"    {line.strip()}",
                                  "size": "sm", "color": color, "wrap": True, "margin": "xs"})
         else:
-            rows.append({"type": "text", "text": mgr, "weight": "bold", "size": "sm"})
+            rows.append({"type": "text", "text": display, "weight": "bold", "size": "sm"})
             rows.append({"type": "text", "text": "    ⏳ 未回報",
                          "size": "sm", "color": "#BBBBBB", "margin": "xs"})
         rows.append({"type": "separator", "margin": "md"})
+
+    # ── 管理層 ─────────────────────────────────────────────────
+    rows.append({"type": "text", "text": "▌ 管理層",
+                 "weight": "bold", "size": "xs", "color": "#2563eb", "margin": "none"})
+    rows.append({"type": "separator", "margin": "sm"})
+    for mgr in MANAGERS:
+        _eve_rows(mgr)
+
+    # ── 各部門員工 ─────────────────────────────────────────────
+    if DEPT_MEMBERS:
+        rows.append({"type": "text", "text": "▌ 員工",
+                     "weight": "bold", "size": "xs", "color": "#ea580c", "margin": "md"})
+        rows.append({"type": "separator", "margin": "sm"})
+        for dept_name, dept in DEPARTMENTS.items():
+            for member in dept['members']:
+                _eve_rows(member, label=f"[{dept_name}] {member}")
+
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
 
@@ -1043,7 +1102,7 @@ def dashboard():
 
     detail_rows = ''
     for day, sessions in days_data.items():
-        for mgr in MANAGERS:
+        for mgr in ALL_MEMBERS:
             # 優先顯示晚報（結果），無晚報才退回早報（待確認）
             evening_items = sessions['evening'].get(mgr, [])
             morning_items = sessions['morning'].get(mgr, [])
@@ -1102,6 +1161,41 @@ def dashboard():
         <div class="snap-card {snap_cls}">
           <div class="snap-icon-wrap">{icon}</div>
           <div><div class="snap-name">{mgr}</div><div class="snap-sub">{sub}</div></div>
+        </div>'''
+
+    # ── 員工今日狀態（依部門）────────────────────────────────
+    dept_cards_html = ''
+    for dept_name, dept in DEPARTMENTS.items():
+        dept_color = dept['color']
+        member_html = ''
+        for member in dept['members']:
+            m_rows = [r for r in today_rows if r['manager'] == member]
+            eve  = [r for r in m_rows if r['session'] == 'evening']
+            morn = [r for r in m_rows if r['session'] == 'morning']
+            eve_done  = sum(1 for r in eve if r['status'] == 'done')
+            eve_total = sum(1 for r in eve if r['status'] in ('done','incomplete'))
+            if eve and any(r['status'] in ('done','incomplete') for r in eve):
+                m_icon, m_sub, m_cls = '✅', f'{eve_done}/{eve_total} 完成', 'done'
+            elif morn and any(r['status'] == 'reported' for r in morn):
+                m_icon, m_sub, m_cls = '📋', '早報已登記', 'pend'
+            elif any(r['item_text'] == '休假' for r in m_rows):
+                m_icon, m_sub, m_cls = '🏖️', '今日休假', 'none'
+            else:
+                m_icon, m_sub, m_cls = '⏳', '尚未回報', 'none'
+            member_html += f'''
+            <div class="snap-card {m_cls}" style="padding:12px 14px">
+              <div class="snap-icon-wrap" style="width:32px;height:32px;font-size:15px">{m_icon}</div>
+              <div><div class="snap-name">{member}</div><div class="snap-sub">{m_sub}</div></div>
+            </div>'''
+        dept_cards_html += f'''
+        <div style="border:1px solid {dept_color}33;border-radius:10px;overflow:hidden;background:#fff">
+          <div style="background:{dept_color}11;padding:10px 16px;border-bottom:1px solid {dept_color}22;
+                      display:flex;align-items:center;gap:8px">
+            <span style="width:4px;height:16px;background:{dept_color};border-radius:2px;display:inline-block"></span>
+            <span style="font-size:13px;font-weight:700;color:{dept_color}">{dept_name}部門</span>
+            <span style="font-size:12px;color:#9ca3af;margin-left:4px">主管：{dept['manager']}</span>
+          </div>
+          <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px">{member_html}</div>
         </div>'''
 
     # ── ② 重複未完成追蹤（查最近 30 天，同任務出現 2 次以上）──
@@ -1173,7 +1267,8 @@ def dashboard():
                 daily_rates[mgr][ds] = None
         cur += timedelta(days=1)
 
-    chart_colors = {'Andy':'#1A73E8','小陳':'#E53935','Hank':'#1AAE1A','小楊':'#FF9800'}
+    chart_colors = {'Andy':'#2563eb','小陳':'#dc2626','Hank':'#16a34a','小楊':'#ea580c',
+                    '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777'}
     datasets_js = []
     for mgr in MANAGERS:
         pts = [daily_rates[mgr].get(d) for d in [
@@ -1399,7 +1494,7 @@ def dashboard():
     .card-body{{padding:20px}}
 
     /* ── 今日快照 ── */
-    .snap-grid{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}}
+    .snap-grid{{display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:12px}}
     .snap-card{{border-radius:10px;padding:16px 14px;border:1.5px solid var(--border);
                 display:flex;align-items:center;gap:12px;transition:box-shadow .15s}}
     .snap-card:hover{{box-shadow:0 2px 12px rgba(0,0,0,.08)}}
@@ -1502,6 +1597,13 @@ def dashboard():
     <div class="card card-body">
       <div class="snap-grid">{snap_cards}</div>
     </div>
+
+    <!-- 員工部門快照 -->
+    <div class="sec-hd">
+      <div class="sec-title"><span class="sec-icon" style="background:#fff7ed">👥</span>員工今日狀態</div>
+      <div class="sec-desc">各部門員工回報進度，依主管部門分組</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px">{dept_cards_html}</div>
 
     <!-- 完成率卡片 -->
     <div class="sec-hd">
@@ -2819,7 +2921,7 @@ def handle_text(event):
     text    = event.message.text.strip()
 
     # 首次身份註冊
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         if text in (f'我是{mgr}', f'我是 {mgr}'):
             register_user(user_id, mgr)
             already_permanent = user_id in STATIC_USER_MAP
