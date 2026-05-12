@@ -2274,10 +2274,14 @@ def sales_dashboard():
             for fmt in ('%Y-%m-%d', '%Y/%m/%d'):
                 try: return _dt2.strptime(date_part, fmt)
                 except: pass
-        # M/D 短格式（如 "4/5" → 今年4月5日）
+        # M/D 短格式（如 "8/25" → 補年份，若補出未來日期則退回去年）
         p = s.split('/')
         if len(p) == 2:
-            try: return _dt2(_today_dt.year, int(p[0]), int(p[1]))
+            try:
+                _dt_try = _dt2(_today_dt.year, int(p[0]), int(p[1]))
+                if _dt_try.date() > _today_dt.date():   # 未來 → 去年
+                    _dt_try = _dt_try.replace(year=_today_dt.year - 1)
+                return _dt_try
             except: pass
         return None
 
