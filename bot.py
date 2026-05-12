@@ -2448,8 +2448,9 @@ def sales_dashboard():
 
     _spd_days  = defaultdict(list)   # model → [days, ...]
     for _r in sold_all:
-        if _r[2] != 'Apple': continue          # 只 iPhone
-        if _spd_exclude(_r[3]): continue       # 排除 7/8/17 系列
+        if _r[2] != 'Apple': continue                          # 只 Apple 品牌
+        if not _r[3].strip().lower().startswith('iphone'): continue  # 排除 iPad/MacBook 等
+        if _spd_exclude(_r[3]): continue                       # 排除 7/8/17 系列
         _d_in  = _parse_inv_date(_r[1])        # 入庫日 (index 1)
         _d_out = _parse_inv_date(_r[10])       # 銷售日 (index 10)
         if _d_in and _d_out:
