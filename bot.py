@@ -26,6 +26,44 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# ── 簡易 TTL 快取（模組級，所有 request 共用）──────────────────────
+import time as _time_mod
+import threading as _threading_mod
+from concurrent.futures import ThreadPoolExecutor as _TPE, as_completed as _as_completed
+
+_CSV_CACHE      = {}          # key=url → {'text':str, 'ts':float}
+_CSV_CACHE_TTL  = 300         # 快取有效秒數（5 分鐘）
+_CSV_CACHE_LOCK = _threading_mod.Lock()
+
+def _fetch_csv_cached(url, timeout=15):
+    """抓 Google Sheets CSV，5 分鐘內同一 URL 不重抓"""
+    import requests as _r
+    now = _time_mod.time()
+    with _CSV_CACHE_LOCK:
+        entry = _CSV_CACHE.get(url)
+        if entry and now - entry['ts'] < _CSV_CACHE_TTL:
+            return entry['text']
+    resp = _r.get(url, timeout=timeout)
+    resp.encoding = 'utf-8-sig'
+    text = resp.text
+    with _CSV_CACHE_LOCK:
+        _CSV_CACHE[url] = {'text': text, 'ts': _time_mod.time()}
+    return text
+
+def _fetch_csv_parallel(urls, timeout=15):
+    """同時抓多個 URL，回傳 {url: text} dict"""
+    results = {}
+    with _TPE(max_workers=len(urls)) as ex:
+        fut_map = {ex.submit(_fetch_csv_cached, u, timeout): u for u in urls}
+        for fut in _as_completed(fut_map):
+            u = fut_map[fut]
+            try:
+                results[u] = fut.result()
+            except Exception as e:
+                logger.warning(f'fetch failed {u}: {e}')
+                results[u] = ''
+    return results
+
 # ── 設定 ────────────────────────────────────────────────────
 LINE_CHANNEL_ACCESS_TOKEN = os.environ['LINE_CHANNEL_ACCESS_TOKEN']
 LINE_CHANNEL_SECRET       = os.environ['LINE_CHANNEL_SECRET']
@@ -1789,52 +1827,52 @@ def sales_dashboard():
                          收購, imei, 備註, 銷售日, 售價, 利潤, 毛利率, 銷售渠道, 狀態])
         return data
 
-    # ── 讀取主資料庫 CSV（115年：合併所有月份分頁）──────────────────
+    # ── 平行抓取所有試算表（快取 5 分鐘）────────────────────────────
+    INV_SHEET_ID  = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
+    _sale_urls = [
+        f'https://docs.google.com/spreadsheets/d/{SHEET_ID_115}/export?format=csv&gid={_gid}'
+        for _gid in GIDS_115
+    ]
+    _inv_urls = [
+        f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv',
+        f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv&gid=1739970295',
+    ] if year_param == '115' else []
+
+    _all_urls    = _sale_urls + _inv_urls
+    _fetched     = _fetch_csv_parallel(_all_urls)
+
+    # 銷售資料
     try:
-        import requests as _req
         data_rows = []
-        for _gid in GIDS_115:
-            _url = f'https://docs.google.com/spreadsheets/d/{SHEET_ID_115}/export?format=csv&gid={_gid}'
-            _r = _req.get(_url, timeout=15)
-            _r.encoding = 'utf-8-sig'
-            _tab = list(csv.reader(io.StringIO(_r.text)))
-            data_rows.extend(_parse_hist(_tab, year_param))
-        data_ok = True
+        for _url in _sale_urls:
+            _text = _fetched.get(_url, '')
+            if _text:
+                data_rows.extend(_parse_hist(list(csv.reader(io.StringIO(_text))), year_param))
+        data_ok = bool(data_rows)
     except Exception as _e:
         logger.error(f'sales_dashboard CSV error: {_e}')
         data_rows = []
         data_ok = False
 
-    # ── 讀取庫存表（只有115年顯示即時庫存）────────────────────────
-    INV_SHEET_ID = '1Oqo1kCTIHay8RAJyWAsJucAbmVYST_ekQEGvkAHUmLo'
+    # 庫存資料
     if year_param == '115':
         try:
-            inv_resp = _req.get(
-                f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv',
-                timeout=15)
-            inv_resp.encoding = 'utf-8-sig'
-            inv_csv = list(csv.reader(io.StringIO(inv_resp.text)))
-            inv_rows = [r for r in inv_csv[1:]
-                        if len(r) >= 13
-                        and r[0].strip().startswith('#')
-                        and r[2].strip() == '在庫']
-            inv_ok = True
+            _inv_text = _fetched.get(_inv_urls[0], '')
+            inv_csv   = list(csv.reader(io.StringIO(_inv_text)))
+            inv_rows  = [r for r in inv_csv[1:]
+                         if len(r) >= 13 and r[0].strip().startswith('#') and r[2].strip() == '在庫']
+            inv_ok = bool(inv_rows)
         except Exception as _e:
             logger.error(f'inventory CSV error: {_e}')
             inv_rows = []
             inv_ok = False
         try:
-            android_resp = _req.get(
-                f'https://docs.google.com/spreadsheets/d/{INV_SHEET_ID}/export?format=csv&gid=1739970295',
-                timeout=15)
-            android_resp.encoding = 'utf-8-sig'
-            android_csv = list(csv.reader(io.StringIO(android_resp.text)))
+            _and_text    = _fetched.get(_inv_urls[1], '')
+            android_csv  = list(csv.reader(io.StringIO(_and_text)))
             android_rows = [r for r in android_csv[1:]
-                            if len(r) >= 13
-                            and r[2].strip().startswith('#')
-                            and r[3].strip() == '在庫'
-                            and r[4].strip()]
-            android_ok = True
+                            if len(r) >= 13 and r[2].strip().startswith('#')
+                            and r[3].strip() == '在庫' and r[4].strip()]
+            android_ok = bool(android_rows)
         except Exception as _e:
             logger.error(f'android CSV error: {_e}')
             android_rows = []
@@ -2308,17 +2346,15 @@ def sales_dashboard():
     today_sale_qty     = len(_today_sold)
     today_sale_profit  = sum(num(r[12]) for r in _today_sold)
 
-    # 回收（來自收購資料庫）
+    # 回收（來自收購資料庫，使用快取）
     PURCHASE_SHEET_ID = '1MV5D3etzguS59DYZuqiXQ7wRkopUxfVqM2ATwLWLoPs'
     try:
-        import requests as _req2
-        _pur_resp = _req2.get(
+        _pur_text = _fetch_csv_cached(
             f'https://docs.google.com/spreadsheets/d/{PURCHASE_SHEET_ID}/export?format=csv',
             timeout=10
         )
-        _pur_resp.encoding = 'utf-8-sig'
         import csv as _csv2, io as _io2
-        _pur_rows        = list(_csv2.reader(_io2.StringIO(_pur_resp.text)))[1:]
+        _pur_rows        = list(_csv2.reader(_io2.StringIO(_pur_text)))[1:]
         _view_slash      = _view_dt.strftime('%Y/%m/%d')
         _cur_mo_slash    = _today_dt.strftime('%Y/%m')
         _pur_today       = [r for r in _pur_rows if len(r)>11 and r[0].strip()[:10]==_view_slash]
