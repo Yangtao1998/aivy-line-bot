@@ -167,12 +167,18 @@ def parse_evening_report(text):
 
 # ── Supabase 寫入 ────────────────────────────────────────────
 def save_morning_to_db(todos, date_str, carryover=None):
-    """儲存早報資料到 Supabase
+    """儲存早報資料到 Supabase（先刪後寫，防止重複）
     carryover: {manager: [(item_text, carryover_count), ...]}
     """
     if not supabase_client:
         return
     try:
+        # 先刪除當日早報舊資料，避免重複
+        supabase_client.table('daily_reports')\
+            .delete()\
+            .eq('report_date', date_str)\
+            .eq('session', 'morning')\
+            .execute()
         rows = []
         for manager in ALL_MEMBERS:
             if manager in todos:
@@ -216,6 +222,12 @@ def save_evening_to_db(reports, date_str):
     if not supabase_client:
         return
     try:
+        # 先刪除當日晚報舊資料，避免重複
+        supabase_client.table('daily_reports')\
+            .delete()\
+            .eq('report_date', date_str)\
+            .eq('session', 'evening')\
+            .execute()
         rows = []
         for manager in ALL_MEMBERS:
             if manager in reports:
@@ -1243,9 +1255,10 @@ def dashboard():
                 </tr>'''
 
     # ── ① 今日快照 ────────────────────────────────────────────
+    today_tw = now_taipei().date()   # 用台灣時區，避免 UTC 偏差
     today_result = supabase_client.table('daily_reports')\
         .select('manager, session, item_text, status')\
-        .eq('report_date', today.isoformat()).execute()
+        .eq('report_date', today_tw.isoformat()).execute()
     today_rows = today_result.data or []
 
     snap_cards = ''
