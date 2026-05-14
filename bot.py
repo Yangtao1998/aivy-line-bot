@@ -3319,6 +3319,16 @@ def build_personal_stats_flex(manager, rows):
 
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text(event):
+    try:
+        _handle_text_inner(event)
+    except Exception as e:
+        logger.error(f'handle_text 異常：{e}', exc_info=True)
+        try:
+            push(TextMessage(text=f"⚠️ [Bot Debug] 處理訊息時發生錯誤：{e}"))
+        except Exception:
+            pass
+
+def _handle_text_inner(event):
     group_id = getattr(event.source, 'group_id', None)
     if not group_id:
         return
