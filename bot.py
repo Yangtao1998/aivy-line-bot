@@ -1028,7 +1028,7 @@ def admin_inject_todos():
     if data.get('push_card', True):
         send_morning_summary()
     else:
-        save_morning_todos_to_db(state[today]['morning']['todos'], today)
+        save_morning_to_db(state[today]['morning']['todos'], today)
         state[today]['morning']['summary_sent'] = True
         save_state(state)
     return jsonify({'ok': True, 'date': today, 'members': list(todos_raw.keys())}), 200
