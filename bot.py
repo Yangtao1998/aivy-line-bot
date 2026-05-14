@@ -980,6 +980,17 @@ def send_evening_summary():
 def ping():
     return 'pong', 200
 
+@app.route('/admin/show-users', methods=['GET'])
+def admin_show_users():
+    """推播目前 state 裡的 user_map 到群組（用於取得 LINE ID）"""
+    state = load_state()
+    user_map = state.get('_user_map', {})
+    static_info = '\n'.join(f'{v}（永久）：{k}' for k, v in STATIC_USER_MAP.items()) or '（無）'
+    dynamic_info = '\n'.join(f'{v}（暫時）：{k}' for k, v in user_map.items()) or '（無）'
+    msg = f"📋 目前已綁定成員：\n\n【永久】\n{static_info}\n\n【暫時（重啟清除）】\n{dynamic_info}"
+    push(TextMessage(text=msg))
+    return 'ok', 200
+
 @app.route('/admin/inject-todos', methods=['POST'])
 def admin_inject_todos():
     """手動注入今日待辦並推播彙整卡（用於補救 state 遺失）
