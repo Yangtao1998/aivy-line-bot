@@ -174,7 +174,7 @@ def save_morning_to_db(todos, date_str, carryover=None):
         return
     try:
         rows = []
-        for manager in MANAGERS:
+        for manager in ALL_MEMBERS:
             if manager in todos:
                 for item in parse_morning_todos(todos[manager]):
                     rows.append({
@@ -217,7 +217,7 @@ def save_evening_to_db(reports, date_str):
         return
     try:
         rows = []
-        for manager in MANAGERS:
+        for manager in ALL_MEMBERS:
             if manager in reports:
                 for item_data in parse_evening_report(reports[manager]):
                     rows.append({
@@ -1012,8 +1012,13 @@ def admin_inject_todos():
         if name in ALL_MEMBERS and text.strip():
             state[today]['morning']['todos'][name] = text.strip()
     save_state(state)
-    # 推播彙整卡
-    send_morning_summary()
+    # 推播彙整卡（push_card=false 時只存 DB 不推卡）
+    if data.get('push_card', True):
+        send_morning_summary()
+    else:
+        save_morning_todos_to_db(state[today]['morning']['todos'], today)
+        state[today]['morning']['summary_sent'] = True
+        save_state(state)
     return jsonify({'ok': True, 'date': today, 'members': list(todos_raw.keys())}), 200
 
 @app.route('/trigger/morning-prompt', methods=['GET'])
