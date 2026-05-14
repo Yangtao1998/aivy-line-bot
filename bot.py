@@ -770,8 +770,8 @@ def build_morning_summary_flex(todos, carryover=None):
         has_carry = name in carryover
         label = _dept_label(name)
         if has_todo or has_carry:
-            rows.append({"type": "text", "text": f"✅  {label}",
-                         "weight": "bold", "size": "sm", "color": "#06C755"})
+            rows.append({"type": "text", "text": label,
+                         "weight": "bold", "size": "sm", "color": "#111111"})
             if has_todo:
                 for line in todos[name].strip().split('\n'):
                     if line.strip():
@@ -782,7 +782,7 @@ def build_morning_summary_flex(todos, carryover=None):
                     rows.append({"type": "text", "text": f"    🔁 {item_text}（結轉×{count}）",
                                  "size": "sm", "color": "#7C3AED", "wrap": True, "margin": "xs"})
         else:
-            rows.append({"type": "text", "text": f"❌  {label} 尚未回報",
+            rows.append({"type": "text", "text": f"{label}  ⏳ 尚未回報",
                          "weight": "bold", "size": "sm", "color": "#BBBBBB"})
         rows.append({"type": "separator", "margin": "md"})
 
