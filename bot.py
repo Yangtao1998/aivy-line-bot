@@ -980,6 +980,31 @@ def send_evening_summary():
 def ping():
     return 'pong', 200
 
+@app.route('/admin/inject-todos', methods=['POST'])
+def admin_inject_todos():
+    """手動注入今日待辦並推播彙整卡（用於補救 state 遺失）
+    Body: {"token": "aivy2024", "todos": {"Andy": "任務1\n任務2", ...}}
+    """
+    from flask import jsonify
+    data = request.get_json(silent=True) or {}
+    if data.get('token') != 'aivy2024':
+        return jsonify({'error': 'unauthorized'}), 403
+    todos_raw = data.get('todos', {})
+    if not todos_raw:
+        return jsonify({'error': 'no todos'}), 400
+    # 寫入 state
+    state = load_state()
+    state, today = ensure_today(state)
+    state[today]['morning']['sent'] = True
+    state[today]['morning']['summary_sent'] = False
+    for name, text in todos_raw.items():
+        if name in ALL_MEMBERS and text.strip():
+            state[today]['morning']['todos'][name] = text.strip()
+    save_state(state)
+    # 推播彙整卡
+    send_morning_summary()
+    return jsonify({'ok': True, 'date': today, 'members': list(todos_raw.keys())}), 200
+
 @app.route('/trigger/morning-prompt', methods=['GET'])
 def trigger_morning_prompt():
     send_morning_prompt()
