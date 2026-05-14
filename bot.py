@@ -3308,10 +3308,10 @@ def handle_text(event):
             register_user(user_id, mgr)
             already_permanent = user_id in STATIC_USER_MAP
             if already_permanent:
-                reply(event.reply_token, f"✅ {mgr} 身份已永久綁定，直接在群組打字回報即可 👍")
+                push(TextMessage(text=f"✅ {mgr} 身份已永久綁定，直接在群組打字回報即可 👍"))
             else:
-                reply(event.reply_token,
-                      f"✅ 暫時記住 {mgr} 了！\n\n📋 你的 LINE ID：\n{user_id}\n\n請把這串 ID 傳給管理員，設定後永久生效 🔒")
+                push(TextMessage(text=
+                      f"✅ 暫時記住 {mgr} 了！\n\n📋 你的 LINE ID：\n{user_id}\n\n請把這串 ID 傳給管理員，設定後永久生效 🔒"))
             return
 
     manager = get_manager_for_user(user_id)
@@ -3320,9 +3320,9 @@ def handle_text(event):
 
     # 個人查詢
     if text in QUERY_KEYWORDS:
-        rows = get_personal_stats(manager)
         try:
-            reply(event.reply_token, build_personal_stats_flex(manager, rows))
+            rows = get_personal_stats(manager)
+            push(build_personal_stats_flex(manager, rows))
         except Exception as e:
             logger.error(f'個人查詢回覆失敗：{e}')
         return
@@ -3332,23 +3332,23 @@ def handle_text(event):
         content = re.sub(r'^(追加|補充)[：:﹕\s]+', '', text).strip()
         if content:
             append_morning_todo(manager, content)
-            reply(event.reply_token, f"✅ {manager} 追加任務已記錄！晚間彙整時一起計算 📋")
+            push(TextMessage(text=f"✅ {manager} 追加任務已記錄！晚間彙整時一起計算 📋"))
         return
 
     # 早晨收集視窗（含深夜 00:00~08:59 提前登記）
     if is_morning_window():
         store_morning_todos(manager, text)
         if is_prenoon_presubmit():
-            reply(event.reply_token,
-                  f"✅ 收到 {manager} 的今日待辦（提前登記）！\n明早 11:00 彙整早報 📋\n晚安 🌙")
+            push(TextMessage(text=
+                  f"✅ 收到 {manager} 的今日待辦（提前登記）！\n明早 11:00 彙整早報 📋\n晚安 🌙"))
         else:
-            reply(event.reply_token, f"✅ 收到 {manager} 的今日待辦！11:00 彙整 📋")
+            push(TextMessage(text=f"✅ 收到 {manager} 的今日待辦！11:00 彙整 📋"))
         return
 
     # 晚間收集視窗
     if is_evening_window():
         store_evening_report(manager, text)
-        reply(event.reply_token, f"✅ 收到 {manager} 的完成回報！00:00 彙整 📋")
+        push(TextMessage(text=f"✅ 收到 {manager} 的完成回報！00:00 彙整 📋"))
         return
 
 # ── 排程器 ───────────────────────────────────────────────────
