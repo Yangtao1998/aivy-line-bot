@@ -665,6 +665,22 @@ def is_prenoon_presubmit():
     state, today = ensure_today(state)
     return 0 <= now.hour <= 8 and not state[today]['morning']['sent']
 
+def is_work_hours():
+    """上班時間（早報發出後 ~ 晚間提示前）：11:00 ~ 20:59"""
+    h = now_taipei().hour
+    return 11 <= h <= 20
+
+def append_morning_todo(manager, extra_text):
+    """在上班時間追加待辦到當日清單"""
+    state = load_state()
+    state, today = ensure_today(state)
+    existing = state[today]['morning']['todos'].get(manager, '')
+    added = '\n'.join(parse_morning_todos(extra_text))
+    state[today]['morning']['todos'][manager] = (
+        (existing + '\n' + added).strip() if existing else added
+    )
+    save_state(state)
+
 def get_unreported_morning():
     state = load_state()
     state, today = ensure_today(state)
@@ -742,53 +758,37 @@ def build_morning_summary_flex(todos, carryover=None):
     carryover = carryover or {}
     rows = []
 
-    def _mgr_rows(mgr):
-        has_todo  = mgr in todos
-        has_carry = mgr in carryover
+    # 部門查找 helper
+    def _dept_label(name):
+        for dept_name, dept in DEPARTMENTS.items():
+            if name in dept['members']:
+                return f"[{dept_name}] {name}"
+        return name
+
+    def _mgr_rows(name):
+        has_todo  = name in todos
+        has_carry = name in carryover
+        label = _dept_label(name)
         if has_todo or has_carry:
-            rows.append({"type": "text", "text": f"✅  {mgr}",
+            rows.append({"type": "text", "text": f"✅  {label}",
                          "weight": "bold", "size": "sm", "color": "#06C755"})
             if has_todo:
-                for line in todos[mgr].strip().split('\n'):
+                for line in todos[name].strip().split('\n'):
                     if line.strip():
                         rows.append({"type": "text", "text": f"    {line.strip()}",
                                      "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
             if has_carry:
-                for item_text, count in carryover[mgr]:
+                for item_text, count in carryover[name]:
                     rows.append({"type": "text", "text": f"    🔁 {item_text}（結轉×{count}）",
                                  "size": "sm", "color": "#7C3AED", "wrap": True, "margin": "xs"})
         else:
-            rows.append({"type": "text", "text": f"❌  {mgr} 尚未回報",
+            rows.append({"type": "text", "text": f"❌  {label} 尚未回報",
                          "weight": "bold", "size": "sm", "color": "#BBBBBB"})
         rows.append({"type": "separator", "margin": "md"})
 
-    # ── 管理層 ─────────────────────────────────────────────────
-    rows.append({"type": "text", "text": "▌ 管理層",
-                 "weight": "bold", "size": "xs", "color": "#2563eb", "margin": "none"})
-    rows.append({"type": "separator", "margin": "sm"})
-    for mgr in MANAGERS:
-        _mgr_rows(mgr)
-
-    # ── 各部門員工 ─────────────────────────────────────────────
-    if DEPT_MEMBERS:
-        rows.append({"type": "text", "text": "▌ 員工",
-                     "weight": "bold", "size": "xs", "color": "#ea580c", "margin": "md"})
-        rows.append({"type": "separator", "margin": "sm"})
-        for dept_name, dept in DEPARTMENTS.items():
-            for member in dept['members']:
-                rows.append({"type": "text",
-                             "text": f"[{dept_name}] {member}",
-                             "weight": "bold", "size": "xs", "color": "#666666", "margin": "sm"})
-                has_todo = member in todos
-                if has_todo:
-                    for line in todos[member].strip().split('\n'):
-                        if line.strip():
-                            rows.append({"type": "text", "text": f"    {line.strip()}",
-                                         "size": "sm", "color": "#444444", "wrap": True, "margin": "xs"})
-                else:
-                    rows.append({"type": "text", "text": "    ⏳ 尚未回報",
-                                 "size": "sm", "color": "#BBBBBB", "margin": "xs"})
-                rows.append({"type": "separator", "margin": "md"})
+    # ── 全員（一視同仁）────────────────────────────────────────
+    for member in ALL_MEMBERS:
+        _mgr_rows(member)
 
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
@@ -827,21 +827,15 @@ def build_evening_summary_flex(reports, report_date=None):
                          "size": "sm", "color": "#BBBBBB", "margin": "xs"})
         rows.append({"type": "separator", "margin": "md"})
 
-    # ── 管理層 ─────────────────────────────────────────────────
-    rows.append({"type": "text", "text": "▌ 管理層",
-                 "weight": "bold", "size": "xs", "color": "#2563eb", "margin": "none"})
-    rows.append({"type": "separator", "margin": "sm"})
-    for mgr in MANAGERS:
-        _eve_rows(mgr)
-
-    # ── 各部門員工 ─────────────────────────────────────────────
-    if DEPT_MEMBERS:
-        rows.append({"type": "text", "text": "▌ 員工",
-                     "weight": "bold", "size": "xs", "color": "#ea580c", "margin": "md"})
-        rows.append({"type": "separator", "margin": "sm"})
+    # ── 全員（一視同仁）────────────────────────────────────────
+    def _dept_label_e(name):
         for dept_name, dept in DEPARTMENTS.items():
-            for member in dept['members']:
-                _eve_rows(member, label=f"[{dept_name}] {member}")
+            if name in dept['members']:
+                return f"[{dept_name}] {name}"
+        return name
+
+    for member in ALL_MEMBERS:
+        _eve_rows(member, label=_dept_label_e(member))
 
     if rows and rows[-1].get("type") == "separator":
         rows.pop()
@@ -3316,6 +3310,14 @@ def handle_text(event):
             reply(event.reply_token, build_personal_stats_flex(manager, rows))
         except Exception as e:
             logger.error(f'個人查詢回覆失敗：{e}')
+        return
+
+    # 追加任務（上班時間 11:00~20:59）
+    if is_work_hours() and re.match(r'^(追加|補充)[：:﹕\s]', text):
+        content = re.sub(r'^(追加|補充)[：:﹕\s]+', '', text).strip()
+        if content:
+            append_morning_todo(manager, content)
+            reply(event.reply_token, f"✅ {manager} 追加任務已記錄！晚間彙整時一起計算 📋")
         return
 
     # 早晨收集視窗（含深夜 00:00~08:59 提前登記）
