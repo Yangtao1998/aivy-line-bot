@@ -718,6 +718,29 @@ def store_evening_report(manager, text):
     state, today = ensure_today(state)
     state[today]['evening']['reports'][manager] = text
     save_state(state)
+    # 立即寫入 Supabase（先刪該成員今日晚報舊資料再插入）
+    if supabase_client:
+        try:
+            supabase_client.table('daily_reports')\
+                .delete()\
+                .eq('report_date', today)\
+                .eq('session', 'evening')\
+                .eq('manager', manager)\
+                .execute()
+            items = parse_evening_report(text)
+            rows = [{
+                'report_date': today,
+                'manager': manager,
+                'session': 'evening',
+                'item_text': it['item'],
+                'status': it['status'],
+                'reason': it['reason']
+            } for it in items]
+            if rows:
+                supabase_client.table('daily_reports').insert(rows).execute()
+            logger.info(f'{manager} 晚報即時寫入 Supabase：{len(rows)} 筆')
+        except Exception as e:
+            logger.error(f'晚報即時寫入失敗：{e}')
 
 def get_evening_reports():
     state = load_state()
