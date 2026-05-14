@@ -1118,7 +1118,7 @@ def dashboard():
     rows = result.data or []
 
     # ── 完成率統計（選取區間） ────────────────────────────────
-    mgr_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+    mgr_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
             continue
@@ -1138,7 +1138,7 @@ def dashboard():
             .gte('report_date', prev_from.isoformat())\
             .lte('report_date', prev_to.isoformat())\
             .execute()
-        last_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+        last_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
         for row in last_result.data:
             if row['status'] == 'not_reported':
                 continue
@@ -1148,7 +1148,7 @@ def dashboard():
                 if row['status'] == 'done':
                     last_stats[m]['done'] += 1
     except Exception:
-        last_stats = {m: {'done': 0, 'total': 0} for m in MANAGERS}
+        last_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
 
     def trend_arrow(this_rate, last_s):
         if last_s['total'] == 0:
@@ -1160,7 +1160,7 @@ def dashboard():
         return '→', '#888'
 
     rate_cards = ''
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         s = mgr_stats[mgr]
         if s['total'] == 0:
             rate, bar_w, color, label = 0, 0, '#ccc', '無資料'
@@ -1249,7 +1249,7 @@ def dashboard():
     today_rows = today_result.data or []
 
     snap_cards = ''
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         mgr_today = [r for r in today_rows if r['manager'] == mgr]
         evening = [r for r in mgr_today if r['session'] == 'evening']
         morning = [r for r in mgr_today if r['session'] == 'morning']
@@ -1269,40 +1269,8 @@ def dashboard():
           <div><div class="snap-name">{mgr}</div><div class="snap-sub">{sub}</div></div>
         </div>'''
 
-    # ── 員工今日狀態（依部門）────────────────────────────────
+    # dept_cards_html 已移除，員工狀態併入 snap_cards（ALL_MEMBERS）
     dept_cards_html = ''
-    for dept_name, dept in DEPARTMENTS.items():
-        dept_color = dept['color']
-        member_html = ''
-        for member in dept['members']:
-            m_rows = [r for r in today_rows if r['manager'] == member]
-            eve  = [r for r in m_rows if r['session'] == 'evening']
-            morn = [r for r in m_rows if r['session'] == 'morning']
-            eve_done  = sum(1 for r in eve if r['status'] == 'done')
-            eve_total = sum(1 for r in eve if r['status'] in ('done','incomplete'))
-            if eve and any(r['status'] in ('done','incomplete') for r in eve):
-                m_icon, m_sub, m_cls = '✅', f'{eve_done}/{eve_total} 完成', 'done'
-            elif morn and any(r['status'] == 'reported' for r in morn):
-                m_icon, m_sub, m_cls = '📋', '早報已登記', 'pend'
-            elif any(r['item_text'] == '休假' for r in m_rows):
-                m_icon, m_sub, m_cls = '🏖️', '今日休假', 'none'
-            else:
-                m_icon, m_sub, m_cls = '⏳', '尚未回報', 'none'
-            member_html += f'''
-            <div class="snap-card {m_cls}" style="padding:12px 14px">
-              <div class="snap-icon-wrap" style="width:32px;height:32px;font-size:15px">{m_icon}</div>
-              <div><div class="snap-name">{member}</div><div class="snap-sub">{m_sub}</div></div>
-            </div>'''
-        dept_cards_html += f'''
-        <div style="border:1px solid {dept_color}33;border-radius:10px;overflow:hidden;background:#fff">
-          <div style="background:{dept_color}11;padding:10px 16px;border-bottom:1px solid {dept_color}22;
-                      display:flex;align-items:center;gap:8px">
-            <span style="width:4px;height:16px;background:{dept_color};border-radius:2px;display:inline-block"></span>
-            <span style="font-size:13px;font-weight:700;color:{dept_color}">{dept_name}部門</span>
-            <span style="font-size:12px;color:#9ca3af;margin-left:4px">主管：{dept['manager']}</span>
-          </div>
-          <div style="padding:12px 14px;display:flex;flex-wrap:wrap;gap:10px">{member_html}</div>
-        </div>'''
 
     # ── ② 重複未完成追蹤（查最近 30 天，同任務出現 2 次以上）──
     thirty_ago = (today - timedelta(days=30)).isoformat()
@@ -1352,7 +1320,7 @@ def dashboard():
         overdue_html = '<div style="text-align:center;padding:20px;color:#aaa;font-size:.85em">近30天無重複未完成項目 🎉</div>'
 
     # ── ③ 完成率趨勢折線圖（依區間每天計算）─────────────────
-    daily_rates = {mgr: {} for mgr in MANAGERS}
+    daily_rates = {mgr: {} for mgr in ALL_MEMBERS}
     rows_by_date = defaultdict(list)
     for r in rows:
         rows_by_date[r['report_date']].append(r)
@@ -1363,7 +1331,7 @@ def dashboard():
         ds = cur.isoformat()
         chart_labels.append(ds[5:])
         day_rows = rows_by_date.get(ds, [])
-        for mgr in MANAGERS:
+        for mgr in ALL_MEMBERS:
             mgr_rows = [r for r in day_rows if r['manager'] == mgr and r['session'] == 'evening'
                         and r['status'] in ('done','incomplete')]
             if mgr_rows:
@@ -1376,7 +1344,7 @@ def dashboard():
     chart_colors = {'Andy':'#2563eb','小陳':'#dc2626','Hank':'#16a34a','小楊':'#ea580c',
                     '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777'}
     datasets_js = []
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         pts = [daily_rates[mgr].get(d) for d in [
             (date_from + timedelta(days=i)).isoformat() for i in range(span_days)]]
         datasets_js.append(f'''{{
@@ -1467,7 +1435,7 @@ def dashboard():
 
     # ── ⑤ 每人平均每日任務量 ─────────────────────────────────
     taskload_html = ''
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         mgr_eve = [r for r in rows if r['manager'] == mgr and r['session'] == 'evening'
                    and r['status'] in ('done','incomplete')]
         active_days = len(set(r['report_date'] for r in mgr_eve)) or 1
@@ -1490,7 +1458,7 @@ def dashboard():
     # ── ⑥ 回報率（有回報的天數 / 區間總天數）────────────────
     punct_html = ''
     sorted_mgrs = []
-    for mgr in MANAGERS:
+    for mgr in ALL_MEMBERS:
         reported_days = len(set(
             r['report_date'] for r in rows
             if r['manager'] == mgr and r['session'] == 'evening'
@@ -1703,13 +1671,6 @@ def dashboard():
     <div class="card card-body">
       <div class="snap-grid">{snap_cards}</div>
     </div>
-
-    <!-- 員工部門快照 -->
-    <div class="sec-hd">
-      <div class="sec-title"><span class="sec-icon" style="background:#fff7ed">👥</span>員工今日狀態</div>
-      <div class="sec-desc">各部門員工回報進度，依主管部門分組</div>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:12px;margin-bottom:24px">{dept_cards_html}</div>
 
     <!-- 完成率卡片 -->
     <div class="sec-hd">
