@@ -1535,6 +1535,15 @@ def dashboard():
         </div>'''
 
     # ── ⑥ 回報率（有回報的天數 / 區間總天數）────────────────
+    # 系統異常日期：這幾天不列入晚報回報率計算（分子分母都排除）
+    OUTAGE_DATES = {'2026-05-14'}
+    range_dates  = set(
+        (date_from + timedelta(days=i)).isoformat()
+        for i in range(span_days)
+    )
+    effective_span = span_days - len(OUTAGE_DATES & range_dates)
+    effective_span = max(effective_span, 1)  # 避免除以零
+
     punct_html = ''
     sorted_mgrs = []
     for mgr in ALL_MEMBERS:
@@ -1542,8 +1551,9 @@ def dashboard():
             r['report_date'] for r in rows
             if r['manager'] == mgr and r['session'] == 'evening'
             and r['status'] in ('done','incomplete')
+            and r['report_date'] not in OUTAGE_DATES  # 排除系統異常日
         ))
-        pct = round(reported_days / span_days * 100)
+        pct = round(reported_days / effective_span * 100)
         sorted_mgrs.append((pct, mgr, reported_days))
     sorted_mgrs.sort(reverse=True)
 
