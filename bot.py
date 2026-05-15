@@ -1002,6 +1002,31 @@ def send_evening_summary():
         report_date = now.date().isoformat()
 
     reports = get_evening_reports_by_key(report_date)
+
+    # ── Supabase 備援：若 state 無資料（Render 重啟導致 state 清空），從 DB 重建 ──
+    if not reports and supabase_client:
+        try:
+            rows = supabase_client.table('daily_reports')\
+                .select('manager, item_text, status, reason')\
+                .eq('report_date', report_date)\
+                .eq('session', 'evening')\
+                .execute().data
+            for row in rows:
+                mgr    = row['manager']
+                item   = row['item_text']
+                status = row['status']
+                reason = row.get('reason', '') or ''
+                mark   = '✅' if status == 'done' else '❌'
+                line   = f"{mark}{item}" + (f"（{reason}）" if reason else '')
+                if mgr not in reports:
+                    reports[mgr] = line
+                else:
+                    reports[mgr] += f'\n{line}'
+            if reports:
+                logger.info(f'從 Supabase 恢復 {len(reports)} 人晚報（state 已清空）')
+        except Exception as e:
+            logger.error(f'從 Supabase 恢復晚報失敗：{e}')
+
     try:
         push(build_evening_summary_flex(reports, report_date))
         mark_evening_summary_sent_by_key(report_date)
