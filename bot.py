@@ -3181,6 +3181,22 @@ h1{{font-size:18px;margin-bottom:4px}}p.sub{{font-size:12px;color:#9ca3af}}</sty
 def webhook():
     signature = request.headers.get('X-Line-Signature', '')
     body = request.get_data(as_text=True)
+    # ── DEBUG：推播 webhook 原始內容到群組（排查完畢後刪除）──
+    try:
+        import json as _j
+        events = _j.loads(body).get('events', [])
+        for ev in events:
+            if ev.get('type') == 'message' and ev.get('message', {}).get('type') == 'text':
+                src   = ev.get('source', {})
+                gid   = src.get('groupId', '無')
+                uid   = src.get('userId', '無')
+                txt   = ev['message'].get('text', '')
+                push(TextMessage(text=
+                    f"[DEBUG] 收到訊息\ngroupId:{gid}\nuserId:{uid}\ntext:{txt[:30]}\n"
+                    f"ENV_GROUP:{GROUP_ID}"))
+    except Exception as _de:
+        push(TextMessage(text=f"[DEBUG] webhook parse error: {_de}"))
+    # ── END DEBUG ──────────────────────────────────────────────
     try:
         handler.handle(body, signature)
     except InvalidSignatureError:
