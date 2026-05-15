@@ -1026,6 +1026,22 @@ def admin_show_users():
     push(TextMessage(text=msg))
     return 'ok', 200
 
+@app.route('/admin/inject-evening', methods=['POST'])
+def admin_inject_evening():
+    """手動補寫指定日期的晚報資料到 Supabase
+    Body: {"token":"aivy2024","date":"2026-05-14","reports":{"Andy":"✅任務1\n❌任務2（原因）",...}}
+    """
+    from flask import jsonify
+    data = request.get_json(silent=True) or {}
+    if data.get('token') != 'aivy2024':
+        return jsonify({'error': 'unauthorized'}), 403
+    date_str  = data.get('date', today_key())
+    reports   = data.get('reports', {})
+    if not reports:
+        return jsonify({'error': 'no reports'}), 400
+    save_evening_to_db(reports, date_str)
+    return jsonify({'ok': True, 'date': date_str, 'members': list(reports.keys())}), 200
+
 @app.route('/admin/inject-todos', methods=['POST'])
 def admin_inject_todos():
     """手動注入今日待辦並推播彙整卡（用於補救 state 遺失）
