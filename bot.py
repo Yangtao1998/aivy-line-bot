@@ -1535,7 +1535,7 @@ def dashboard():
         </div>'''
 
     # ── ⑥ 回報率（有回報的天數 / 區間總天數）────────────────
-    # 系統異常日期：這幾天不列入晚報回報率計算（分子分母都排除）
+    # 系統異常日期：不列入分母（不算「應回報日」），但分子照算（有回報就有功勞）
     OUTAGE_DATES = {'2026-05-14'}
     range_dates  = set(
         (date_from + timedelta(days=i)).isoformat()
@@ -1551,9 +1551,9 @@ def dashboard():
             r['report_date'] for r in rows
             if r['manager'] == mgr and r['session'] == 'evening'
             and r['status'] in ('done','incomplete')
-            and r['report_date'] not in OUTAGE_DATES  # 排除系統異常日
         ))
-        pct = round(reported_days / effective_span * 100)
+        # 避免超過 100%（回報日含異常日時分子可能 > 分母）
+        pct = min(round(reported_days / effective_span * 100), 100)
         sorted_mgrs.append((pct, mgr, reported_days))
     sorted_mgrs.sort(reverse=True)
 
