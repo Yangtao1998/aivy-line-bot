@@ -1040,6 +1040,8 @@ def admin_inject_evening():
     if not reports:
         return jsonify({'error': 'no reports'}), 400
     save_evening_to_db(reports, date_str)
+    if data.get('push_card', False):
+        push(build_evening_summary_flex(reports, report_date=date_str))
     return jsonify({'ok': True, 'date': date_str, 'members': list(reports.keys())}), 200
 
 @app.route('/admin/inject-todos', methods=['POST'])
