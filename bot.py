@@ -85,6 +85,12 @@ DEPT_MEMBERS = [m for d in DEPARTMENTS.values() for m in d['members']]
 ALL_MEMBERS  = MANAGERS + DEPT_MEMBERS            # 全員（用於資料收集）
 STATE_FILE = 'state.json'
 
+# ── 排除日期（公司出遊、國定假日等不計入統計）──────────────────
+EXCLUDED_DATES = {
+    '2026-05-18', '2026-05-19', '2026-05-20',
+    '2026-05-21', '2026-05-22', '2026-05-23',
+}
+
 # ── Supabase ─────────────────────────────────────────────────
 supabase_client = None
 if SUPABASE_URL and SUPABASE_KEY:
@@ -1193,7 +1199,7 @@ def dashboard():
         .order('manager')\
         .execute()
 
-    rows = result.data or []
+    rows = [r for r in (result.data or []) if r['report_date'] not in EXCLUDED_DATES]
 
     # ── 完成率統計（選取區間） ────────────────────────────────
     mgr_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
@@ -1218,7 +1224,7 @@ def dashboard():
             .execute()
         last_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
         for row in last_result.data:
-            if row['status'] == 'not_reported':
+            if row['status'] == 'not_reported' or row.get('report_date') in EXCLUDED_DATES:
                 continue
             m = row['manager']
             if m in last_stats:
@@ -1358,7 +1364,7 @@ def dashboard():
         .eq('session', 'evening').eq('status', 'incomplete')\
         .gte('report_date', thirty_ago)\
         .order('report_date', desc=False).execute()
-    overdue_rows = overdue_result.data or []
+    overdue_rows = [r for r in (overdue_result.data or []) if r['report_date'] not in EXCLUDED_DATES]
 
     item_dates = defaultdict(list)
     item_reasons = defaultdict(list)
@@ -1406,26 +1412,28 @@ def dashboard():
 
     chart_labels = []
     cur = date_from
+    active_dates = []
     while cur <= date_to:
         ds = cur.isoformat()
-        chart_labels.append(ds[5:])
-        day_rows = rows_by_date.get(ds, [])
-        for mgr in ALL_MEMBERS:
-            mgr_rows = [r for r in day_rows if r['manager'] == mgr and r['session'] == 'evening'
-                        and r['status'] in ('done','incomplete')]
-            if mgr_rows:
-                r_done = sum(1 for r in mgr_rows if r['status'] == 'done')
-                daily_rates[mgr][ds] = round(r_done / len(mgr_rows) * 100)
-            else:
-                daily_rates[mgr][ds] = None
+        if ds not in EXCLUDED_DATES:
+            chart_labels.append(ds[5:])
+            active_dates.append(ds)
+            day_rows = rows_by_date.get(ds, [])
+            for mgr in ALL_MEMBERS:
+                mgr_rows = [r for r in day_rows if r['manager'] == mgr and r['session'] == 'evening'
+                            and r['status'] in ('done','incomplete')]
+                if mgr_rows:
+                    r_done = sum(1 for r in mgr_rows if r['status'] == 'done')
+                    daily_rates[mgr][ds] = round(r_done / len(mgr_rows) * 100)
+                else:
+                    daily_rates[mgr][ds] = None
         cur += timedelta(days=1)
 
     chart_colors = {'Andy':'#2563eb','小陳':'#dc2626','Hank':'#16a34a','小楊':'#ea580c',
                     '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777'}
     datasets_js = []
     for mgr in ALL_MEMBERS:
-        pts = [daily_rates[mgr].get(d) for d in [
-            (date_from + timedelta(days=i)).isoformat() for i in range(span_days)]]
+        pts = [daily_rates[mgr].get(d) for d in active_dates]
         datasets_js.append(f'''{{
           label:'{mgr}',data:{_json.dumps(pts)},
           borderColor:'{chart_colors[mgr]}',backgroundColor:'{chart_colors[mgr]}22',
