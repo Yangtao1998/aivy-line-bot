@@ -3391,7 +3391,7 @@ def handle_text(event):
 
 def _handle_text_inner(event):
     group_id = getattr(event.source, 'group_id', None)
-    if not group_id:
+    if not group_id or group_id != GROUP_ID:
         return
     user_id = event.source.user_id
     text    = event.message.text.strip()
