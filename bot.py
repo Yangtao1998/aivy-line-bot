@@ -3459,7 +3459,7 @@ def self_ping():
 
 scheduler.add_job(self_ping,             'interval', minutes=10)
 scheduler.add_job(send_monthly_report,   'cron', day=1, hour=8, minute=0)
-scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)
+# scheduler.add_job(send_weekly_report,    'cron', day_of_week='mon', hour=8, minute=0)  # 已停用
 scheduler.add_job(check_missing_reports, 'cron', hour=8,  minute=20)
 scheduler.add_job(check_overdue_items,   'cron', hour=8,  minute=30)
 scheduler.add_job(send_morning_prompt,   'cron', hour=9,  minute=0)
