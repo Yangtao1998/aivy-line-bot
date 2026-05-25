@@ -1549,8 +1549,9 @@ def dashboard():
         (date_from + timedelta(days=i)).isoformat()
         for i in range(span_days)
     )
-    effective_span = span_days - len(OUTAGE_DATES & range_dates)
-    effective_span = max(effective_span, 1)  # 避免除以零
+    # 同時扣除旅遊/假期排除日（EXCLUDED_DATES）與系統異常日
+    skip_dates    = (OUTAGE_DATES | EXCLUDED_DATES) & range_dates
+    effective_span = max(span_days - len(skip_dates), 1)  # 避免除以零
 
     punct_html = ''
     sorted_mgrs = []
