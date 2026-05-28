@@ -1287,8 +1287,8 @@ def dashboard():
         days_data.setdefault(d, {'morning': defaultdict(list), 'evening': defaultdict(list)})
         days_data[d][s][m].append(row)
 
-    STATUS_COLOR = {'done':'#1AAE1A','incomplete':'#E53935','reported':'#FF9800','not_reported':'#BBBBBB'}
-    STATUS_LABEL = {'done':'✅','incomplete':'❌','reported':'📋','not_reported':'⏳'}
+    STATUS_COLOR = {'done':'#1AAE1A','incomplete':'#E53935','reported':'#FF9800','not_reported':'#E53935'}
+    STATUS_LABEL = {'done':'✅','incomplete':'❌','reported':'📋','not_reported':'⚠️'}
 
     detail_rows = ''
     for day, sessions in days_data.items():
@@ -1318,11 +1318,13 @@ def dashboard():
                     co_tag = ''
                     reason = f'<br><small style="color:#aaa">（{raw_reason}）</small>' if raw_reason else ''
                 pending_hint = ' <small style="color:#bbb;font-size:11px">待晚報</small>' if is_pending and i == 0 else ''
+                is_late_morning = (item['session'] == 'morning' and item['status'] == 'not_reported')
+                late_badge = ' <span style="font-size:11px;background:#fee2e2;color:#E53935;padding:1px 6px;border-radius:8px;font-weight:600">⚠️ 未準時繳交</span>' if is_late_morning else ''
                 rs = len(items)
                 detail_rows += f'''<tr>
                   {"<td rowspan='" + str(rs) + "' style='font-weight:bold;color:#555;white-space:nowrap'>" + day[5:] + "</td>" if i==0 else ""}
                   {"<td rowspan='" + str(rs) + "' style='font-weight:bold'>" + mgr + pending_hint + "</td>" if i==0 else ""}
-                  <td>{item["item_text"]}{co_tag}{reason}</td>
+                  <td>{item["item_text"]}{co_tag}{late_badge}{reason}</td>
                   <td style="color:{color};font-weight:bold;text-align:center">{emoji}</td>
                 </tr>'''
 
@@ -1344,6 +1346,8 @@ def dashboard():
             snap_cls, icon, sub = 'done', '✅', f'晚報已回報・{eve_done}/{eve_total} 完成'
         elif morning and any(r['status'] == 'reported' for r in morning):
             snap_cls, icon, sub = 'pend', '📋', '早報已登記・待晚報'
+        elif morning and any(r['status'] == 'not_reported' for r in morning):
+            snap_cls, icon, sub = 'late', '⚠️', '早報未準時繳交'
         elif any(r['status'] == 'done' and r['item_text'] == '休假' for r in mgr_today):
             snap_cls, icon, sub = 'none', '🏖️', '今日休假'
         else:
@@ -1678,6 +1682,8 @@ def dashboard():
     .snap-card.pend .snap-icon-wrap{{background:#fff7ed}}
     .snap-card.none{{border-color:var(--border)}}
     .snap-card.none .snap-icon-wrap{{background:var(--bg)}}
+    .snap-card.late{{border-color:#fca5a5;background:#fff5f5}}
+    .snap-card.late .snap-icon-wrap{{background:#fee2e2}}
     .snap-name{{font-size:13px;font-weight:700;color:var(--text)}}
     .snap-sub{{font-size:11px;color:var(--gray);margin-top:2px}}
 
