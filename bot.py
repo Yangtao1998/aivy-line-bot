@@ -1304,7 +1304,8 @@ def dashboard():
         </div>'''
 
     # ── 未完成原因統計 ────────────────────────────────────────
-    incomplete_items = [r for r in rows if r['session'] == 'evening' and r['status'] == 'incomplete']
+    incomplete_items = [r for r in rows if r['session'] == 'evening' and r['status'] == 'incomplete'
+                        and r['manager'] in display_members]
     incomplete_items.sort(key=lambda x: (x['manager'], x['report_date']))
 
     reason_rows = ''
