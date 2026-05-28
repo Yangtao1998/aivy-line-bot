@@ -1223,6 +1223,12 @@ def dashboard():
     until_iso = date_to.isoformat()
     span_days  = (date_to - date_from).days + 1
 
+    # ── 個人視角篩選 ─────────────────────────────────────────
+    selected_member = request.args.get('member', '').strip()
+    if selected_member not in ALL_MEMBERS:
+        selected_member = ''
+    display_members = [selected_member] if selected_member else ALL_MEMBERS
+
     result = supabase_client.table('daily_reports')\
         .select('report_date, manager, session, item_text, status, reason')\
         .gte('report_date', since_iso)\
@@ -1234,7 +1240,7 @@ def dashboard():
     rows = [r for r in (result.data or []) if r['report_date'] not in EXCLUDED_DATES]
 
     # ── 完成率統計（選取區間） ────────────────────────────────
-    mgr_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
+    mgr_stats = {m: {'done': 0, 'total': 0} for m in display_members}
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
             continue
@@ -1256,7 +1262,7 @@ def dashboard():
             .gte('report_date', prev_from.isoformat())\
             .lte('report_date', prev_to.isoformat())\
             .execute()
-        last_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
+        last_stats = {m: {'done': 0, 'total': 0} for m in display_members}
         for row in last_result.data:
             if row['status'] == 'not_reported' or row.get('report_date') in EXCLUDED_DATES:
                 continue
@@ -1266,7 +1272,7 @@ def dashboard():
                 if row['status'] == 'done':
                     last_stats[m]['done'] += 1
     except Exception:
-        last_stats = {m: {'done': 0, 'total': 0} for m in ALL_MEMBERS}
+        last_stats = {m: {'done': 0, 'total': 0} for m in display_members}
 
     def trend_arrow(this_rate, last_s):
         if last_s['total'] == 0:
@@ -1278,7 +1284,7 @@ def dashboard():
         return '→', '#888'
 
     rate_cards = ''
-    for mgr in ALL_MEMBERS:
+    for mgr in display_members:
         s = mgr_stats[mgr]
         if s['total'] == 0:
             rate, bar_w, color, label = 0, 0, '#ccc', '無資料'
@@ -1326,7 +1332,7 @@ def dashboard():
 
     detail_rows = ''
     for day, sessions in days_data.items():
-        for mgr in ALL_MEMBERS:
+        for mgr in display_members:
             # 優先顯示晚報（結果），無晚報才退回早報（待確認）
             evening_items = sessions['evening'].get(mgr, [])
             morning_items = sessions['morning'].get(mgr, [])
@@ -1370,7 +1376,7 @@ def dashboard():
     today_rows = today_result.data or []
 
     snap_cards = ''
-    for mgr in ALL_MEMBERS:
+    for mgr in display_members:
         mgr_today = [r for r in today_rows if r['manager'] == mgr]
         evening = [r for r in mgr_today if r['session'] == 'evening']
         morning = [r for r in mgr_today if r['session'] == 'morning']
@@ -1443,7 +1449,7 @@ def dashboard():
         overdue_html = '<div style="text-align:center;padding:20px;color:#aaa;font-size:.85em">近30天無重複未完成項目 🎉</div>'
 
     # ── ③ 完成率趨勢折線圖（依區間每天計算）─────────────────
-    daily_rates = {mgr: {} for mgr in ALL_MEMBERS}
+    daily_rates = {mgr: {} for mgr in display_members}
     rows_by_date = defaultdict(list)
     for r in rows:
         rows_by_date[r['report_date']].append(r)
@@ -1457,7 +1463,7 @@ def dashboard():
             chart_labels.append(ds[5:])
             active_dates.append(ds)
             day_rows = rows_by_date.get(ds, [])
-            for mgr in ALL_MEMBERS:
+            for mgr in display_members:
                 mgr_rows = [r for r in day_rows if r['manager'] == mgr and r['session'] == 'evening'
                             and r['status'] in ('done','incomplete')]
                 if mgr_rows:
@@ -1470,7 +1476,7 @@ def dashboard():
     chart_colors = {'Andy':'#2563eb','小陳':'#dc2626','Hank':'#16a34a','小楊':'#ea580c',
                     '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777'}
     datasets_js = []
-    for mgr in ALL_MEMBERS:
+    for mgr in display_members:
         pts = [daily_rates[mgr].get(d) for d in active_dates]
         datasets_js.append(f'''{{
           label:'{mgr}',data:{_json.dumps(pts)},
@@ -1560,7 +1566,7 @@ def dashboard():
 
     # ── ⑤ 每人平均每日任務量 ─────────────────────────────────
     taskload_html = ''
-    for mgr in ALL_MEMBERS:
+    for mgr in display_members:
         mgr_eve = [r for r in rows if r['manager'] == mgr and r['session'] == 'evening'
                    and r['status'] in ('done','incomplete')]
         active_days = len(set(r['report_date'] for r in mgr_eve)) or 1
@@ -1604,7 +1610,7 @@ def dashboard():
 
     punct_html = ''
     sorted_mgrs = []
-    for mgr in ALL_MEMBERS:
+    for mgr in display_members:
         reported_count = 0
         total_count    = 0
         missed_list    = []   # [{'date':'05/24','session':'早報/晚報'}, ...]
@@ -1693,11 +1699,47 @@ def dashboard():
     date_from_str   = date_from.isoformat()
     date_to_str     = date_to.isoformat()
 
+    member_qs = f'&member={selected_member}' if selected_member else ''
     btn = lambda r, label: (
-        f'<a href="/dashboard?range={r}" class="range-btn active">{label}</a>'
+        f'<a href="/dashboard?range={r}{member_qs}" class="range-btn active">{label}</a>'
         if active_range == r else
-        f'<a href="/dashboard?range={r}" class="range-btn">{label}</a>'
+        f'<a href="/dashboard?range={r}{member_qs}" class="range-btn">{label}</a>'
     )
+
+    # 成員下拉選單 HTML
+    member_options = '<option value="">👥 全員</option>' + ''.join(
+        f'<option value="{m}" {"selected" if m == selected_member else ""}>{m}</option>'
+        for m in ALL_MEMBERS
+    )
+    member_range_qs = f'range={active_range}' if active_range != 'custom' else f'from={date_from_str}&to={date_to_str}'
+    member_selector = f'''
+    <div style="display:flex;align-items:center;gap:6px">
+      <span style="font-size:12px;color:var(--gray);font-weight:600;white-space:nowrap">成員視角</span>
+      <select onchange="location.href='/dashboard?{member_range_qs}&member='+this.value"
+              style="border:1.5px solid var(--border);border-radius:6px;padding:4px 8px;
+                     font-size:12px;background:var(--white);color:var(--text);cursor:pointer">
+        {member_options}
+      </select>
+    </div>'''
+
+    # 個人視角橫幅（選擇特定成員時顯示）
+    if selected_member:
+        personal_banner = f'''
+    <div style="background:linear-gradient(135deg,#1A73E8,#0d5dbf);color:#fff;
+                padding:16px 24px;border-radius:12px;margin-bottom:20px;
+                display:flex;align-items:center;gap:14px">
+      <div style="font-size:2em">👤</div>
+      <div>
+        <div style="font-size:18px;font-weight:700">{selected_member} 個人回報總覽</div>
+        <div style="font-size:12px;opacity:.8;margin-top:3px">{since_iso[5:]} ～ {until_iso[5:]}　僅顯示個人數據</div>
+      </div>
+      <a href="/dashboard?{member_range_qs}"
+         style="margin-left:auto;background:rgba(255,255,255,.2);color:#fff;
+                padding:7px 16px;border-radius:8px;text-decoration:none;
+                font-size:12px;font-weight:600;white-space:nowrap">← 返回全員</a>
+    </div>'''
+    else:
+        personal_banner = ''
 
     html = f'''<!DOCTYPE html>
 <html lang="zh-Hant">
@@ -1857,16 +1899,19 @@ def dashboard():
     {btn('30', '近 30 天')}
     <div class="divider-v"></div>
     <form class="custom-form" method="get" action="/dashboard">
+      <input type="hidden" name="member" value="{selected_member}">
       <input type="date" name="from" value="{date_from_str}" max="{today.isoformat()}">
       <span style="color:var(--gray);font-size:12px">～</span>
       <input type="date" name="to" value="{date_to_str}" max="{today.isoformat()}">
       <button type="submit">{'✔ 套用' if active_range == 'custom' else '自訂'}</button>
     </form>
+    <div class="divider-v"></div>
+    {member_selector}
     <span style="margin-left:auto;font-size:12px;color:var(--gray)">{since_iso[5:]} ～ {until_iso[5:]}　共 {span_days} 天</span>
   </div>
 
   <div class="container">
-
+    {personal_banner}
     <!-- ① 今日快照 -->
     <div class="sec-hd" style="margin-top:0">
       <div class="sec-title"><span class="sec-icon" style="background:#eff6ff">🗓</span>今日快照</div>
