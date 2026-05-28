@@ -228,6 +228,15 @@ def save_evening_to_db(reports, date_str):
     if not supabase_client:
         return
     try:
+        # 查詢當日早報登記休假的人員
+        vac_result = supabase_client.table('daily_reports')\
+            .select('manager')\
+            .eq('report_date', date_str)\
+            .eq('session', 'morning')\
+            .eq('item_text', '休假')\
+            .execute()
+        vacation_managers = {r['manager'] for r in (vac_result.data or [])}
+
         # 先刪除當日晚報舊資料，避免重複
         supabase_client.table('daily_reports')\
             .delete()\
@@ -246,6 +255,16 @@ def save_evening_to_db(reports, date_str):
                         'status': item_data['status'],
                         'reason': item_data['reason']
                     })
+            elif manager in vacation_managers:
+                # 休假者免繳晚報，自動標記
+                rows.append({
+                    'report_date': date_str,
+                    'manager': manager,
+                    'session': 'evening',
+                    'item_text': '休假',
+                    'status': 'done',
+                    'reason': '休假免回報'
+                })
             else:
                 rows.append({
                     'report_date': date_str,
@@ -428,9 +447,22 @@ def check_missing_reports():
             .gte('report_date', four_days_ago)\
             .execute()
 
+        # 查詢同期休假紀錄，休假日不算缺報
+        vac_result = supabase_client.table('daily_reports')\
+            .select('report_date, manager')\
+            .eq('session', 'morning')\
+            .eq('item_text', '休假')\
+            .gte('report_date', four_days_ago)\
+            .execute()
+        vacation_dates = defaultdict(set)
+        for row in (vac_result.data or []):
+            vacation_dates[row['manager']].add(row['report_date'])
+
         missing_dates = defaultdict(set)
         for row in result.data:
-            missing_dates[row['manager']].add(row['report_date'])
+            mgr, d = row['manager'], row['report_date']
+            if d not in vacation_dates[mgr]:
+                missing_dates[mgr].add(d)
 
         alerts = []
         for manager in ALL_MEMBERS:
@@ -1206,6 +1238,8 @@ def dashboard():
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
             continue
+        if row['item_text'] == '休假':  # 休假日不計入完成率
+            continue
         m = row['manager']
         if m in mgr_stats:
             mgr_stats[m]['total'] += 1
@@ -1348,7 +1382,7 @@ def dashboard():
             snap_cls, icon, sub = 'pend', '📋', '早報已登記・待晚報'
         elif morning and any(r['status'] == 'not_reported' for r in morning):
             snap_cls, icon, sub = 'late', '⚠️', '早報未準時繳交'
-        elif any(r['status'] == 'done' and r['item_text'] == '休假' for r in mgr_today):
+        elif any(r['item_text'] == '休假' for r in mgr_today if r['session'] == 'morning'):
             snap_cls, icon, sub = 'none', '🏖️', '今日休假'
         else:
             snap_cls, icon, sub = 'none', '⏳', '尚未回報'
@@ -1560,13 +1594,21 @@ def dashboard():
     punct_html = ''
     sorted_mgrs = []
     for mgr in ALL_MEMBERS:
+        # 休假天數從個人分母扣除
+        vacation_days = len(set(
+            r['report_date'] for r in rows
+            if r['manager'] == mgr and r['session'] == 'evening'
+            and r['item_text'] == '休假'
+        ))
+        personal_span = max(effective_span - vacation_days, 1)
         reported_days = len(set(
             r['report_date'] for r in rows
             if r['manager'] == mgr and r['session'] == 'evening'
             and r['status'] in ('done','incomplete')
+            and r['item_text'] != '休假'
         ))
-        # 避免超過 100%（回報日含異常日時分子可能 > 分母）
-        pct = min(round(reported_days / effective_span * 100), 100)
+        # 避免超過 100%
+        pct = min(round(reported_days / personal_span * 100), 100)
         sorted_mgrs.append((pct, mgr, reported_days))
     sorted_mgrs.sort(reverse=True)
 
