@@ -1588,45 +1588,103 @@ def dashboard():
         for i in range(span_days)
     )
     # 同時扣除旅遊/假期排除日（EXCLUDED_DATES）與系統異常日
-    skip_dates    = (OUTAGE_DATES | EXCLUDED_DATES) & range_dates
-    effective_span = max(span_days - len(skip_dates), 1)  # 避免除以零
+    skip_dates = (OUTAGE_DATES | EXCLUDED_DATES) & range_dates
+
+    # 區間內有效日期清單（已排除例外日）
+    range_active_dates = sorted([
+        (date_from + timedelta(days=i)).isoformat()
+        for i in range(span_days)
+        if (date_from + timedelta(days=i)).isoformat() not in skip_dates
+    ])
+
+    # 快速查詢：(manager, date, session) -> rows
+    _lookup = defaultdict(list)
+    for r in rows:
+        _lookup[(r['manager'], r['report_date'], r['session'])].append(r)
 
     punct_html = ''
     sorted_mgrs = []
     for mgr in ALL_MEMBERS:
-        # 休假天數從個人分母扣除
-        vacation_days = len(set(
-            r['report_date'] for r in rows
-            if r['manager'] == mgr and r['session'] == 'evening'
-            and r['item_text'] == '休假'
-        ))
-        personal_span = max(effective_span - vacation_days, 1)
-        reported_days = len(set(
-            r['report_date'] for r in rows
-            if r['manager'] == mgr and r['session'] == 'evening'
-            and r['status'] in ('done','incomplete')
-            and r['item_text'] != '休假'
-        ))
-        # 避免超過 100%
-        pct = min(round(reported_days / personal_span * 100), 100)
-        sorted_mgrs.append((pct, mgr, reported_days))
+        reported_count = 0
+        total_count    = 0
+        missed_list    = []   # [{'date':'05/24','session':'早報/晚報'}, ...]
+
+        for ds in range_active_dates:
+            # 判斷是否休假
+            is_vacation = any(
+                r['item_text'] == '休假'
+                for r in _lookup[(mgr, ds, 'morning')] + _lookup[(mgr, ds, 'evening')]
+            )
+            if is_vacation:
+                continue
+
+            # 早報
+            morning_rows = _lookup[(mgr, ds, 'morning')]
+            if morning_rows:
+                total_count += 1
+                if any(r['status'] == 'reported' for r in morning_rows):
+                    reported_count += 1
+                else:
+                    missed_list.append({'date': ds[5:].replace('-', '/'), 'session': '早報'})
+
+            # 晚報
+            evening_rows = _lookup[(mgr, ds, 'evening')]
+            if evening_rows:
+                total_count += 1
+                if any(r['status'] in ('done', 'incomplete') and r['item_text'] != '休假'
+                       for r in evening_rows):
+                    reported_count += 1
+                else:
+                    missed_list.append({'date': ds[5:].replace('-', '/'), 'session': '晚報'})
+
+        pct = min(round(reported_count / max(total_count, 1) * 100), 100)
+        sorted_mgrs.append((pct, mgr, reported_count, total_count, missed_list))
     sorted_mgrs.sort(reverse=True)
 
-    for pct, mgr, rdays in sorted_mgrs:
+    for pct, mgr, rcount, tcount, missed_list in sorted_mgrs:
         bar_color = '#1AAE1A' if pct >= 80 else '#FF9800' if pct >= 60 else '#E53935'
         if pct >= 90:   label, lc = '🏆 最積極', '#1AAE1A'
         elif pct >= 75: label, lc = '準時', '#888'
         elif pct >= 60: label, lc = '偶爾缺報', '#FF9800'
         else:           label, lc = '⚠️ 常缺報', '#E53935'
+
+        # 未回報明細下拉
+        if missed_list:
+            missed_items = ''.join([
+                f'<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 9px;'
+                f'border-radius:6px;font-size:11px;font-weight:600;'
+                f'background:{"#fee2e2" if m["session"]=="晚報" else "#fff7ed"};'
+                f'color:{"#E53935" if m["session"]=="晚報" else "#ea580c"}">'
+                f'{m["date"]} {m["session"]}</span>'
+                for m in missed_list
+            ])
+            dropdown = f'''<details style="margin-top:6px">
+              <summary style="font-size:11px;color:#9ca3af;cursor:pointer;
+                              display:flex;align-items:center;gap:4px;list-style:none;
+                              -webkit-appearance:none">
+                <span style="font-size:9px;transition:.2s">▶</span>&nbsp;未回報明細（{len(missed_list)} 次）
+              </summary>
+              <div style="margin-top:6px;padding:8px 10px;background:#fff;
+                          border-radius:8px;border:1px solid #f0f0f0">
+                {missed_items}
+              </div>
+            </details>'''
+            detail_block = f'<div style="padding:0 16px 10px 16px">{dropdown}</div>'
+        else:
+            detail_block = ''
+
         punct_html += f'''
-        <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;
-                    background:#f5f6fa;border-radius:10px;margin-bottom:6px">
-          <div style="font-weight:700;width:44px;font-size:13px;color:#1a1d23">{mgr}</div>
-          <div style="flex:1;height:6px;background:#e8eaed;border-radius:99px;overflow:hidden">
-            <div style="height:6px;border-radius:99px;background:{bar_color};width:{pct}%"></div>
+        <div style="background:#f5f6fa;border-radius:10px;margin-bottom:6px;overflow:hidden">
+          <div style="display:flex;align-items:center;gap:12px;padding:10px 16px">
+            <div style="font-weight:700;width:44px;font-size:13px;color:#1a1d23">{mgr}</div>
+            <div style="flex:1;height:6px;background:#e8eaed;border-radius:99px;overflow:hidden">
+              <div style="height:6px;border-radius:99px;background:{bar_color};width:{pct}%"></div>
+            </div>
+            <div style="width:40px;text-align:right;font-weight:700;font-size:13px;
+                        color:{bar_color}">{pct}%</div>
+            <div style="width:80px;text-align:right;font-size:11px;color:{lc}">{label}</div>
           </div>
-          <div style="width:40px;text-align:right;font-weight:700;font-size:13px;color:{bar_color}">{pct}%</div>
-          <div style="width:80px;text-align:right;font-size:11px;color:{lc}">{label}</div>
+          {detail_block}
         </div>'''
 
     # ── 時間軸選擇器 ─────────────────────────────────────────
@@ -1879,8 +1937,8 @@ def dashboard():
       </div>
       <div>
         <div class="sec-hd">
-          <div class="sec-title"><span class="sec-icon" style="background:#f0fdf4">📬</span>晚報回報率</div>
-          <div class="sec-desc">統計每人晚間準時回報的天數比例</div>
+          <div class="sec-title"><span class="sec-icon" style="background:#f0fdf4">📬</span>回報率</div>
+          <div class="sec-desc">統計每人早報＋晚報準時回報的次數比例，點名稱可展開未回報明細</div>
         </div>
         <div class="card card-body">{punct_html}
           <div style="font-size:11px;color:var(--gray);text-align:center;margin-top:8px">
