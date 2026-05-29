@@ -752,11 +752,25 @@ def mark_evening_summary_sent():
     save_state(state)
 
 def store_evening_report(manager, text):
+    """儲存晚報，並偵測「明日待辦」區塊預存隔日早報。
+    回傳：預存的明日待辦項目數（0 = 無預存）"""
+    # ── 偵測並分割「明日待辦」區塊 ─────────────────────────
+    tmrw_count = 0
+    TMRW_MARKERS = ['明日待辦', '明天待辦', '隔日待辦', '隔天待辦', '明日事項', '明天事項']
+    tomorrow_text = None
+    for marker in TMRW_MARKERS:
+        if marker in text:
+            parts = text.split(marker, 1)
+            text = parts[0].strip()                       # 今日晚報部分
+            tomorrow_text = parts[1].lstrip('：:\n ').strip()  # 明日待辦部分
+            break
+
     state = load_state()
     state, today = ensure_today(state)
     state[today]['evening']['reports'][manager] = text
     save_state(state)
-    # 立即寫入 Supabase（先刪該成員今日晚報舊資料再插入）
+
+    # ── 今日晚報寫入 Supabase ─────────────────────────────
     if supabase_client:
         try:
             supabase_client.table('daily_reports')\
@@ -779,6 +793,34 @@ def store_evening_report(manager, text):
             logger.info(f'{manager} 晚報即時寫入 Supabase：{len(rows)} 筆')
         except Exception as e:
             logger.error(f'晚報即時寫入失敗：{e}')
+
+    # ── 明日待辦預存 ──────────────────────────────────────
+    if tomorrow_text and supabase_client:
+        try:
+            tomorrow_str = (date.today() + timedelta(days=1)).isoformat()
+            supabase_client.table('daily_reports')\
+                .delete()\
+                .eq('report_date', tomorrow_str)\
+                .eq('session', 'morning')\
+                .eq('manager', manager)\
+                .execute()
+            tmrw_items = parse_morning_todos(tomorrow_text)
+            tmrw_rows = [{
+                'report_date': tomorrow_str,
+                'manager': manager,
+                'session': 'morning',
+                'item_text': item,
+                'status': 'reported',
+                'reason': '前夜預提'
+            } for item in tmrw_items]
+            if tmrw_rows:
+                supabase_client.table('daily_reports').insert(tmrw_rows).execute()
+                tmrw_count = len(tmrw_rows)
+                logger.info(f'{manager} 明日待辦預提 {tmrw_count} 項')
+        except Exception as e:
+            logger.error(f'{manager} 明日待辦預提失敗：{e}')
+
+    return tmrw_count
 
 def get_evening_reports():
     state = load_state()
@@ -990,6 +1032,28 @@ def send_morning_summary():
         return
     todos = get_morning_todos()
     today = today_key()
+
+    # 合併前夜預提的待辦（昨晚在晚報中附上的「明日待辦」）
+    if supabase_client:
+        try:
+            pre_result = supabase_client.table('daily_reports')\
+                .select('manager, item_text')\
+                .eq('report_date', today)\
+                .eq('session', 'morning')\
+                .eq('status', 'reported')\
+                .eq('reason', '前夜預提')\
+                .execute()
+            if pre_result.data:
+                pre_by_mgr = defaultdict(list)
+                for r in pre_result.data:
+                    pre_by_mgr[r['manager']].append(r['item_text'])
+                for mgr, items in pre_by_mgr.items():
+                    if mgr not in todos:   # 今早已自行回報者不覆蓋
+                        todos[mgr] = '\n'.join(items)
+                        logger.info(f'{mgr} 使用前夜預提待辦 {len(items)} 項')
+        except Exception as e:
+            logger.error(f'讀取前夜預提待辦失敗：{e}')
+
     # 取得需要自動結轉的昨日未完成任務
     carryover = get_carryover_items(today)
     if carryover:
@@ -1016,7 +1080,9 @@ def send_evening_prompt():
         push(TextMessage(
             text="🌙 請各位直接在群組輸入今日完成狀況\n\n"
                  "格式範例：\n✅ 盤點配件庫存\n✅ 同步官網庫存\n❌ 整理展示機台（客人太多）\n\n"
-                 "00:00 將自動彙整完成狀況 📋"
+                 "💡 想同時預登明天待辦？在下方加上：\n\n"
+                 "明日待辦\n任務A\n任務B\n任務C\n\n"
+                 "00:00 將自動彙整完成狀況，明日待辦將於明早 11:00 帶入 📋"
         ))
     except Exception as e:
         logger.error(f'晚間提示發送失敗：{e}')
@@ -3594,8 +3660,15 @@ def _handle_text_inner(event):
 
     # 晚間收集視窗
     if is_evening_window():
-        store_evening_report(manager, text)
-        push(TextMessage(text=f"✅ 收到 {manager} 的完成回報！00:00 彙整 📋"))
+        tmrw_count = store_evening_report(manager, text)
+        if tmrw_count > 0:
+            push(TextMessage(text=(
+                f"✅ 收到 {manager} 的完成回報！\n"
+                f"📋 明日 {tmrw_count} 項待辦已預先登記\n"
+                f"明早 11:00 自動帶入彙整卡 ✨"
+            )))
+        else:
+            push(TextMessage(text=f"✅ 收到 {manager} 的完成回報！00:00 彙整 📋"))
         return
 
 # ── 排程器 ───────────────────────────────────────────────────
