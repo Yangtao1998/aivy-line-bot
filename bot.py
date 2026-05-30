@@ -1107,16 +1107,21 @@ def send_evening_summary():
 
     reports = get_evening_reports_by_key(report_date)
 
-    # ── Supabase 備援：若 state 無資料（Render 重啟導致 state 清空），從 DB 重建 ──
-    if not reports and supabase_client:
+    # ── Supabase 補全：不論 state 是否有資料，都從 DB 補入即時寫入但 state 已遺失的回報 ──
+    # （Render 重啟會清掉 state，但即時寫入的 Supabase 記錄仍在）
+    if supabase_client:
         try:
             rows = supabase_client.table('daily_reports')\
                 .select('manager, item_text, status, reason')\
                 .eq('report_date', report_date)\
                 .eq('session', 'evening')\
-                .execute().data
+                .neq('status', 'not_reported')\
+                .execute().data or []
+            recovered = 0
             for row in rows:
-                mgr    = row['manager']
+                mgr = row['manager']
+                if mgr in reports or row['item_text'] == '休假':
+                    continue   # state 已有資料或休假，跳過
                 item   = row['item_text']
                 status = row['status']
                 reason = row.get('reason', '') or ''
@@ -1124,12 +1129,13 @@ def send_evening_summary():
                 line   = f"{mark}{item}" + (f"（{reason}）" if reason else '')
                 if mgr not in reports:
                     reports[mgr] = line
+                    recovered += 1
                 else:
                     reports[mgr] += f'\n{line}'
-            if reports:
-                logger.info(f'從 Supabase 恢復 {len(reports)} 人晚報（state 已清空）')
+            if recovered:
+                logger.info(f'從 Supabase 補全 {recovered} 人晚報（state 部分遺失）')
         except Exception as e:
-            logger.error(f'從 Supabase 恢復晚報失敗：{e}')
+            logger.error(f'從 Supabase 補全晚報失敗：{e}')
 
     try:
         push(build_evening_summary_flex(reports, report_date))
