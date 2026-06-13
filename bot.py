@@ -1330,7 +1330,7 @@ def dashboard():
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
             continue
-        if row['item_text'] == '休假':  # 休假日不計入完成率
+        if row['item_text'] in ('休假', '教召'):  # 休假/教召不計入完成率
             continue
         m = row['manager']
         if m in mgr_stats:
