@@ -736,7 +736,21 @@ def get_unreported_morning():
     state, today = ensure_today(state)
     if not state[today]['morning']['sent']:
         return []
-    return [m for m in ALL_MEMBERS if m not in state[today]['morning']['todos']]
+    reported = set(state[today]['morning']['todos'].keys())
+    # 前夜預提的待辦視同已回報，不列入提醒
+    if supabase_client:
+        try:
+            pre = supabase_client.table('daily_reports')\
+                .select('manager')\
+                .eq('report_date', today)\
+                .eq('session', 'morning')\
+                .eq('reason', '前夜預提')\
+                .execute()
+            for r in (pre.data or []):
+                reported.add(r['manager'])
+        except Exception as e:
+            logger.error(f'前夜預提查詢失敗：{e}')
+    return [m for m in ALL_MEMBERS if m not in reported]
 
 # ── 晚間狀態 ─────────────────────────────────────────────────
 def mark_evening_sent():
