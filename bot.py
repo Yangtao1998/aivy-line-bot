@@ -1703,12 +1703,13 @@ def dashboard():
         missed_list    = []   # [{'date':'05/24','session':'早報/晚報'}, ...]
 
         for ds in range_active_dates:
-            # 判斷是否休假
-            is_vacation = any(
-                r['item_text'] == '休假'
-                for r in _lookup[(mgr, ds, 'morning')] + _lookup[(mgr, ds, 'evening')]
+            # 判斷是否休假或教召（不列入分母）
+            all_rows_day = _lookup[(mgr, ds, 'morning')] + _lookup[(mgr, ds, 'evening')]
+            is_absence = any(
+                r['item_text'] in ('休假', '教召')
+                for r in all_rows_day
             )
-            if is_vacation:
+            if is_absence:
                 continue
 
             # 早報
@@ -1724,7 +1725,7 @@ def dashboard():
             evening_rows = _lookup[(mgr, ds, 'evening')]
             if evening_rows:
                 total_count += 1
-                if any(r['status'] in ('done', 'incomplete') and r['item_text'] != '休假'
+                if any(r['status'] in ('done', 'incomplete') and r['item_text'] not in ('休假', '教召')
                        for r in evening_rows):
                     reported_count += 1
                 else:
