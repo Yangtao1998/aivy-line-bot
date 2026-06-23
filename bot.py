@@ -1330,7 +1330,7 @@ def dashboard():
     for row in rows:
         if row['session'] != 'evening' or row['status'] == 'not_reported':
             continue
-        if row['item_text'] in ('休假', '教召'):  # 休假/教召不計入完成率
+        if row['item_text'] in ('休假', '教召', '進修'):  # 休假/教召/進修不計入完成率
             continue
         m = row['manager']
         if m in mgr_stats:
@@ -1706,7 +1706,7 @@ def dashboard():
             # 判斷是否休假或教召（不列入分母）
             all_rows_day = _lookup[(mgr, ds, 'morning')] + _lookup[(mgr, ds, 'evening')]
             is_absence = any(
-                r['item_text'] in ('休假', '教召')
+                r['item_text'] in ('休假', '教召', '進修')
                 for r in all_rows_day
             )
             if is_absence:
@@ -1725,7 +1725,7 @@ def dashboard():
             evening_rows = _lookup[(mgr, ds, 'evening')]
             if evening_rows:
                 total_count += 1
-                if any(r['status'] in ('done', 'incomplete') and r['item_text'] not in ('休假', '教召')
+                if any(r['status'] in ('done', 'incomplete') and r['item_text'] not in ('休假', '教召', '進修')
                        for r in evening_rows):
                     reported_count += 1
                 else:
