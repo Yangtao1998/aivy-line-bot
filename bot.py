@@ -876,9 +876,32 @@ def is_evening_window():
 def get_unreported_evening():
     state = load_state()
     state, today = ensure_today(state)
-    if not state[today]['evening']['sent']:
+
+    sent = state[today]['evening']['sent']
+    reported = set(state[today]['evening']['reports'].keys())
+
+    # Supabase 補查：Render 重啟後 state 遺失，從 DB 還原已回報 & 休假成員
+    if supabase_client:
+        try:
+            rows = supabase_client.table('daily_reports')\
+                .select('manager, item_text, status')\
+                .eq('report_date', today)\
+                .eq('session', 'evening')\
+                .execute().data or []
+            for r in rows:
+                # 已回報（非 not_reported）或休假，都不列入提醒
+                if r['status'] != 'not_reported' or r['item_text'] in ('休假', '教召', '進修'):
+                    reported.add(r['manager'])
+            # DB 有晚間紀錄代表 9pm 提示已發出（state 可能因重啟遺失）
+            if rows:
+                sent = True
+        except Exception as e:
+            logger.error(f'晚間未回報補查失敗：{e}')
+
+    if not sent:
         return []
-    return [m for m in ALL_MEMBERS if m not in state[today]['evening']['reports']]
+
+    return [m for m in ALL_MEMBERS if m not in reported]
 
 # ── Flex Message 建立 ────────────────────────────────────────
 def build_morning_summary_flex(todos, carryover=None):
