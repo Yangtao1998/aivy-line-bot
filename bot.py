@@ -2,6 +2,7 @@ import os
 import re
 import json
 import logging
+import time
 from dotenv import load_dotenv
 load_dotenv()
 from datetime import datetime, date, timedelta
@@ -25,6 +26,20 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+
+# ── Supabase retry helper ────────────────────────────────────────
+def supabase_insert_with_retry(rows, retries=3, delay=1.5):
+    """Supabase insert with retry on ConnectionReset / network errors."""
+    for attempt in range(retries):
+        try:
+            supabase_client.table('daily_reports').insert(rows).execute()
+            return
+        except Exception as e:
+            if attempt < retries - 1 and ('ConnectionReset' in str(e) or 'Connection aborted' in str(e) or '104' in str(e)):
+                logger.warning(f'Supabase insert 失敗（第{attempt+1}次），{delay}s 後重試：{e}')
+                time.sleep(delay)
+            else:
+                raise
 
 # ── 簡易 TTL 快取（模組級，所有 request 共用）──────────────────────
 import time as _time_mod
@@ -803,7 +818,7 @@ def store_evening_report(manager, text):
                 'reason': it['reason']
             } for it in items]
             if rows:
-                supabase_client.table('daily_reports').insert(rows).execute()
+                supabase_insert_with_retry(rows)
             logger.info(f'{manager} 晚報即時寫入 Supabase：{len(rows)} 筆')
         except Exception as e:
             logger.error(f'晚報即時寫入失敗：{e}')
@@ -828,7 +843,7 @@ def store_evening_report(manager, text):
                 'reason': '前夜預提'
             } for item in tmrw_items]
             if tmrw_rows:
-                supabase_client.table('daily_reports').insert(tmrw_rows).execute()
+                supabase_insert_with_retry(tmrw_rows)
                 tmrw_count = len(tmrw_rows)
                 logger.info(f'{manager} 明日待辦預提 {tmrw_count} 項')
         except Exception as e:
@@ -3641,16 +3656,23 @@ def build_personal_stats_flex(manager, rows):
     return FlexMessage(alt_text=f"{manager} 的個人紀錄",
                        contents=FlexContainer.from_dict(bubble))
 
+_processed_events: set = set()  # webhook 去重，防止 LINE retry 重複處理
+
 @handler.add(MessageEvent, message=TextMessageContent)
 def handle_text(event):
+    # LINE webhook retry 去重：同一 event_id 只處理一次
+    event_id = getattr(event, 'webhook_event_id', None) or event.message.id
+    if event_id in _processed_events:
+        logger.info(f'重複 webhook 已忽略：{event_id}')
+        return
+    _processed_events.add(event_id)
+    if len(_processed_events) > 500:  # 避免記憶體無限增長
+        _processed_events.clear()
+
     try:
         _handle_text_inner(event)
     except Exception as e:
         logger.error(f'handle_text 異常：{e}', exc_info=True)
-        try:
-            push(TextMessage(text=f"⚠️ [Bot Debug] 處理訊息時發生錯誤：{e}"))
-        except Exception:
-            pass
 
 def _handle_text_inner(event):
     group_id = getattr(event.source, 'group_id', None)
