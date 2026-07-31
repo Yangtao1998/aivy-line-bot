@@ -1247,6 +1247,22 @@ def send_evening_prompt():
     except Exception as e:
         logger.error(f'晚間提示發送失敗：{e}')
 
+def send_vacation_reminder():
+    """每週日 20:00 提醒登記下週休假"""
+    try:
+        push(TextMessage(
+            text="📅 下週休假登記提醒\n\n"
+                 "請對照排班表，把下週的休假登記給我～\n\n"
+                 "用法（群組直接打字）：\n"
+                 "・休假 8/3\n"
+                 "・休假 8/3~8/5（連休）\n"
+                 "・小楊休假 8/3（幫別人登記）\n"
+                 "・取消休假 8/3（登錯取消）\n\n"
+                 "登記後當天早晚報自動免回報，不列入統計 ✅"
+        ))
+    except Exception as e:
+        logger.error(f'休假登記提醒失敗：{e}')
+
 def send_evening_reminder():
     unreported = get_unreported_evening()
     if not unreported:
@@ -3895,6 +3911,7 @@ scheduler.add_job(check_overdue_items,   'cron', hour=8,  minute=30)
 scheduler.add_job(send_morning_prompt,   'cron', hour=9,  minute=0)
 scheduler.add_job(send_morning_reminder, 'cron', hour=10, minute=0)
 scheduler.add_job(send_morning_summary,  'cron', hour=11, minute=0)
+scheduler.add_job(send_vacation_reminder, 'cron', day_of_week='sun', hour=20, minute=0)
 scheduler.add_job(send_evening_prompt,   'cron', hour=21, minute=0)
 scheduler.add_job(send_evening_reminder, 'cron', hour=23, minute=0)
 scheduler.add_job(send_evening_summary,  'cron', hour=0,  minute=0)
