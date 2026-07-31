@@ -100,6 +100,9 @@ DEPT_MEMBERS = [m for d in DEPARTMENTS.values() for m in d['members']]
 ALL_MEMBERS  = MANAGERS + DEPT_MEMBERS            # 全員（用於資料收集）
 STATE_FILE = 'state.json'
 
+# ── 休假／缺勤類型（不計入回報統計）─────────────────────────────
+ABSENCE_TYPES = ('休假', '教召', '進修')
+
 # ── 排除日期（公司出遊、國定假日等不計入統計）──────────────────
 EXCLUDED_DATES = {
     '2026-05-18', '2026-05-19', '2026-05-20',
@@ -194,6 +197,14 @@ def save_morning_to_db(todos, date_str, carryover=None):
     if not supabase_client:
         return
     try:
+        # 查詢預先登記的休假（先刪後寫會洗掉，需保留）
+        vac_result = supabase_client.table('daily_reports')\
+            .select('manager, item_text')\
+            .eq('report_date', date_str)\
+            .eq('session', 'morning')\
+            .in_('item_text', list(ABSENCE_TYPES))\
+            .execute()
+        pre_vacation = {r['manager']: r['item_text'] for r in (vac_result.data or [])}
         # 先刪除當日早報舊資料，避免重複
         supabase_client.table('daily_reports')\
             .delete()\
@@ -202,7 +213,17 @@ def save_morning_to_db(todos, date_str, carryover=None):
             .execute()
         rows = []
         for manager in ALL_MEMBERS:
-            if manager in todos:
+            if manager in pre_vacation and manager not in todos:
+                # 預先登記休假且當日無回報 → 保留休假記錄
+                rows.append({
+                    'report_date': date_str,
+                    'manager': manager,
+                    'session': 'morning',
+                    'item_text': pre_vacation[manager],
+                    'status': 'reported',
+                    'reason': ''
+                })
+            elif manager in todos:
                 for item in parse_morning_todos(todos[manager]):
                     rows.append({
                         'report_date': date_str,
@@ -243,14 +264,14 @@ def save_evening_to_db(reports, date_str):
     if not supabase_client:
         return
     try:
-        # 查詢當日早報登記休假的人員
+        # 查詢當日早報登記休假／教召／進修的人員
         vac_result = supabase_client.table('daily_reports')\
-            .select('manager')\
+            .select('manager, item_text')\
             .eq('report_date', date_str)\
             .eq('session', 'morning')\
-            .eq('item_text', '休假')\
+            .in_('item_text', list(ABSENCE_TYPES))\
             .execute()
-        vacation_managers = {r['manager'] for r in (vac_result.data or [])}
+        vacation_managers = {r['manager']: r['item_text'] for r in (vac_result.data or [])}
 
         # 先刪除當日晚報舊資料，避免重複
         supabase_client.table('daily_reports')\
@@ -271,14 +292,15 @@ def save_evening_to_db(reports, date_str):
                         'reason': item_data['reason']
                     })
             elif manager in vacation_managers:
-                # 休假者免繳晚報，自動標記
+                # 休假／教召／進修者免繳晚報，自動標記
+                vac_type = vacation_managers[manager]
                 rows.append({
                     'report_date': date_str,
                     'manager': manager,
                     'session': 'evening',
-                    'item_text': '休假',
+                    'item_text': vac_type,
                     'status': 'done',
-                    'reason': '休假免回報'
+                    'reason': f'{vac_type}免回報'
                 })
             else:
                 rows.append({
@@ -752,20 +774,106 @@ def get_unreported_morning():
     if not state[today]['morning']['sent']:
         return []
     reported = set(state[today]['morning']['todos'].keys())
-    # 前夜預提的待辦視同已回報，不列入提醒
+    # 前夜預提的待辦、預先登記的休假，視同已回報不列入提醒
     if supabase_client:
         try:
             pre = supabase_client.table('daily_reports')\
-                .select('manager')\
+                .select('manager, item_text, reason')\
                 .eq('report_date', today)\
                 .eq('session', 'morning')\
-                .eq('reason', '前夜預提')\
                 .execute()
             for r in (pre.data or []):
-                reported.add(r['manager'])
+                if r.get('reason') == '前夜預提' or r['item_text'] in ABSENCE_TYPES:
+                    reported.add(r['manager'])
         except Exception as e:
             logger.error(f'前夜預提查詢失敗：{e}')
     return [m for m in ALL_MEMBERS if m not in reported]
+
+# ── 休假登記 ─────────────────────────────────────────────────
+def parse_vacation_dates(text, today_str):
+    """解析休假日期字串 → ['YYYY-MM-DD', ...]，無日期則回傳今天。
+    支援：今天、明天、後天、8/3、08/03、8月3日、8/3~8/5（區間）、多個日期併列"""
+    from datetime import datetime as _dt, timedelta as _td
+    base = _dt.strptime(today_str, '%Y-%m-%d')
+    dates = set()
+    t = text.replace('，', ' ').replace('、', ' ').replace(',', ' ')
+    if '今天' in t or '今日' in t:
+        dates.add(base)
+    if '明天' in t or '明日' in t:
+        dates.add(base + _td(days=1))
+    if '後天' in t:
+        dates.add(base + _td(days=2))
+
+    def to_date(m_str, d_str):
+        try:
+            d = _dt(base.year, int(m_str), int(d_str))
+        except ValueError:
+            return None
+        # 超過 60 天前的日期視為明年（跨年登記）
+        if (base - d).days > 60:
+            d = _dt(base.year + 1, int(m_str), int(d_str))
+        return d
+
+    # 區間：8/3~8/5、8/3-8/5
+    for m in re.finditer(r'(\d{1,2})[/月](\d{1,2})日?\s*[~\-～至]\s*(\d{1,2})[/月](\d{1,2})日?', t):
+        d1, d2 = to_date(m.group(1), m.group(2)), to_date(m.group(3), m.group(4))
+        if d1 and d2 and d1 <= d2 and (d2 - d1).days <= 31:
+            cur = d1
+            while cur <= d2:
+                dates.add(cur)
+                cur += _td(days=1)
+    t_no_range = re.sub(r'\d{1,2}[/月]\d{1,2}日?\s*[~\-～至]\s*\d{1,2}[/月]\d{1,2}日?', '', t)
+    # 單日：8/3、8月3日
+    for m in re.finditer(r'(\d{1,2})[/月](\d{1,2})日?', t_no_range):
+        d = to_date(m.group(1), m.group(2))
+        if d:
+            dates.add(d)
+    if not dates:
+        dates.add(base)
+    return sorted(d.strftime('%Y-%m-%d') for d in dates)
+
+def register_vacation(member, date_list, vac_type='休假'):
+    """登記休假：清掉未回報記錄，寫入早晚休假記錄；當天同步更新 state"""
+    if not supabase_client:
+        return False
+    today = now_taipei().strftime('%Y-%m-%d')
+    for d in date_list:
+        # 清掉該日未回報 / 舊的休假類記錄（防重複）
+        supabase_client.table('daily_reports').delete()\
+            .eq('report_date', d).eq('manager', member)\
+            .eq('status', 'not_reported').execute()
+        supabase_client.table('daily_reports').delete()\
+            .eq('report_date', d).eq('manager', member)\
+            .in_('item_text', list(ABSENCE_TYPES)).execute()
+        supabase_insert_with_retry([
+            {'report_date': d, 'manager': member, 'session': 'morning',
+             'item_text': vac_type, 'status': 'reported', 'reason': ''},
+            {'report_date': d, 'manager': member, 'session': 'evening',
+             'item_text': vac_type, 'status': 'done', 'reason': f'{vac_type}免回報'},
+        ])
+        if d == today:
+            state = load_state()
+            state, _t = ensure_today(state)
+            state[_t]['morning']['todos'][member] = vac_type
+            save_state(state)
+    return True
+
+def cancel_vacation(member, date_list):
+    """取消休假登記：刪除該日的休假類記錄"""
+    if not supabase_client:
+        return False
+    today = now_taipei().strftime('%Y-%m-%d')
+    for d in date_list:
+        supabase_client.table('daily_reports').delete()\
+            .eq('report_date', d).eq('manager', member)\
+            .in_('item_text', list(ABSENCE_TYPES)).execute()
+        if d == today:
+            state = load_state()
+            state, _t = ensure_today(state)
+            if state[_t]['morning']['todos'].get(member) in ABSENCE_TYPES:
+                del state[_t]['morning']['todos'][member]
+                save_state(state)
+    return True
 
 # ── 晚間狀態 ─────────────────────────────────────────────────
 def mark_evening_sent():
@@ -3704,6 +3812,37 @@ def _handle_text_inner(event):
             push(build_personal_stats_flex(manager, rows))
         except Exception as e:
             logger.error(f'個人查詢回覆失敗：{e}')
+        return
+
+    # 休假登記／取消（任何時段可用，支援代登記與提前登記）
+    # 格式：休假、明天休假、休假 8/3、休假 8/3~8/5、小楊休假 8/3、取消休假 8/3
+    _names = '|'.join(re.escape(m) for m in ALL_MEMBERS)
+    vac_m = re.match(
+        rf'^(?:幫\s*)?({_names})?\s*(取消)?\s*(?:(今天|今日|明天|明日|後天)\s*)?'
+        rf'(休假|請假|教召|進修)\s*'
+        rf'((?:[\s，、,]*(?:今天|今日|明天|明日|後天|\d{{1,2}}[/月]\d{{1,2}}日?(?:\s*[~\-～至]\s*\d{{1,2}}[/月]\d{{1,2}}日?)?))*)\s*$',
+        text)
+    if vac_m:
+        target = vac_m.group(1) or manager
+        is_cancel = bool(vac_m.group(2))
+        vac_type = '休假' if vac_m.group(4) == '請假' else vac_m.group(4)
+        date_text = f"{vac_m.group(3) or ''} {vac_m.group(5) or ''}"
+        today_str = now_taipei().strftime('%Y-%m-%d')
+        try:
+            dates = parse_vacation_dates(date_text, today_str)
+            date_disp = '、'.join(f"{int(d[5:7])}/{int(d[8:10])}" for d in dates)
+            if is_cancel:
+                cancel_vacation(target, dates)
+                push(TextMessage(text=f"↩️ 已取消 {target} 的{vac_type}登記：{date_disp}\n當天請正常回報 📋"))
+            else:
+                register_vacation(target, dates, vac_type)
+                by = '' if target == manager else f"（由 {manager} 代登記）"
+                push(TextMessage(text=(
+                    f"🏖️ 已登記 {target} {vac_type}：{date_disp}{by}\n"
+                    f"當天早晚報免回報，不列入統計 ✅")))
+        except Exception as e:
+            logger.error(f'休假登記失敗：{e}', exc_info=True)
+            push(TextMessage(text=f"⚠️ {vac_type}登記失敗，請稍後再試或通知管理員"))
         return
 
     # 追加任務（上班時間 11:00~20:59）
