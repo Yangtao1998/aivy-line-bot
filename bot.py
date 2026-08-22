@@ -92,7 +92,7 @@ handler       = WebhookHandler(LINE_CHANNEL_SECRET)
 TZ         = pytz.timezone('Asia/Taipei')
 MANAGERS   = ['Andy', '小陳', 'Hank', '小楊']   # 管理層（用於 KPI、趨勢圖）
 DEPARTMENTS = {                                   # 部門 → 主管 + 員工
-    '門市': {'manager': '小陳', 'color': '#E53935', 'members': ['英英']},
+    '門市': {'manager': '小陳', 'color': '#E53935', 'members': ['英英', '浩毅']},
     '維修': {'manager': 'Hank',  'color': '#16a34a', 'members': ['小杰']},
     '印尼': {'manager': '小楊', 'color': '#ea580c', 'members': ['Jordan']},
 }
@@ -682,6 +682,7 @@ for _mgr, _env in [
     ('英英',   'LINE_USER_YINGYING'),
     ('小杰',   'LINE_USER_XIAOJIE'),
     ('Jordan', 'LINE_USER_JORDAN'),
+    ('浩毅',   'LINE_USER_HAOYI'),
 ]:
     _uid = os.environ.get(_env, '').strip()
     if _uid:
@@ -1707,7 +1708,7 @@ def dashboard():
         cur += timedelta(days=1)
 
     chart_colors = {'Andy':'#2563eb','小陳':'#dc2626','Hank':'#16a34a','小楊':'#ea580c',
-                    '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777'}
+                    '英英':'#7c3aed','小杰':'#0891b2','Jordan':'#db2777','浩毅':'#0d9488'}
     datasets_js = []
     for mgr in display_members:
         pts = [daily_rates[mgr].get(d) for d in active_dates]
